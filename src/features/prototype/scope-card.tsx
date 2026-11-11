@@ -1,4 +1,3 @@
-import type { Ref } from "react";
 import { Textarea } from "@/components/ui/textarea";
 import { SCOPE_CARD_EMPTY_TEXT, scopeCardFields, type ScopeCard } from "./model";
 
@@ -28,57 +27,37 @@ export function ScopeCardFacts({
   );
 }
 
-/** Editable scope card fields shared by the profile and the application form. */
+/** Editable scope card fields shared by the profile and the application form. All optional. */
 export function ScopeCardEditor({
   value,
   onChange,
   idPrefix,
   disabled,
-  ownWorkRequired,
-  ownWorkError,
-  ownWorkRef,
 }: {
   value: ScopeCard;
   onChange: (value: ScopeCard) => void;
   idPrefix: string;
   disabled?: boolean;
-  ownWorkRequired?: boolean;
-  ownWorkError?: string;
-  ownWorkRef?: Ref<HTMLTextAreaElement>;
 }) {
   return (
     <div className="scope-card-editor">
       {scopeCardFields.map((field) => {
         const id = `${idPrefix}-${field.key}`;
-        const own = field.key === "ownWork";
-        const error = own ? ownWorkError : undefined;
-        const required = own && ownWorkRequired;
         return (
           <div className="field" key={field.key}>
-            <label htmlFor={id}>
-              {field.label}
-              {required ? " (wymagane)" : " (opcjonalnie)"}
-            </label>
+            <label htmlFor={id}>{field.label} (opcjonalnie)</label>
             <p className="scope-card-hint" id={`${id}-hint`}>
               {field.hint}
             </p>
             <Textarea
               id={id}
-              ref={own ? ownWorkRef : undefined}
               disabled={disabled}
               rows={3}
               maxLength={1000}
-              required={required || undefined}
-              aria-invalid={error ? true : undefined}
-              aria-describedby={error ? `${id}-hint ${id}-error` : `${id}-hint`}
+              aria-describedby={`${id}-hint`}
               value={value[field.key]}
               onChange={(event) => onChange({ ...value, [field.key]: event.target.value })}
             />
-            {error && (
-              <p id={`${id}-error`} className="error-message" role="alert">
-                {error}
-              </p>
-            )}
           </div>
         );
       })}

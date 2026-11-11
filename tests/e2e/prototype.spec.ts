@@ -9,7 +9,7 @@ async function choose(page: Page, name: string) {
 }
 const ownWork = "Przeprowadziłam 18 wywiadów z użytkownikami i ustaliłam priorytety wdrożenia.";
 async function fillOwnWork(page: Page) {
-  await page.getByLabel("Mój własny wkład (wymagane)").fill(ownWork);
+  await page.getByLabel("Mój własny wkład (opcjonalnie)").fill(ownWork);
 }
 async function application(page: Page) {
   await choose(page, "Anna Kowalska");
@@ -328,19 +328,7 @@ test("application submission explains short answers and missing approval without
   await page.goto("/#/aplikuj/ai-product-manager");
   const answer = page.getByLabel("Dlaczego pasujesz do tej roli?");
   const send = page.getByRole("button", { name: "Wyślij aplikację", exact: true });
-  const own = page.getByLabel("Mój własny wkład (wymagane)");
   await answer.fill("krótka odpowiedź");
-  await send.click();
-  // Every missing requirement is shown at once; focus goes to the first invalid field.
-  await expect(page.getByRole("alert")).toHaveText([
-    "Opisz swój własny wkład. To pole jest wymagane przed wysłaniem.",
-    /Odpowiedź jest za krótka/,
-    "Zatwierdź treść aplikacji i jej przesłanie pracodawcy.",
-  ]);
-  await expect(own).toBeFocused();
-  await expect(own).toHaveAttribute("aria-invalid", "true");
-  await expect(answer).toHaveValue("krótka odpowiedź");
-  await own.fill(ownWork);
   await page.getByRole("checkbox").check();
   await expect(send).toBeEnabled();
   await send.click();
@@ -1022,9 +1010,31 @@ test("candidate snapshot supports custom CV and long content at desktop and mobi
   );
 });
 
-test("scope card is saved in the profile, reused in an application and shown first to the employer", async ({
+/** Scenario with the E1 flag on: AI Product Manager is scope_card, AI Operations Specialist control. */
+async function seedExperiment(page: Page) {
+  const state = initialState();
+  state.experiment = { e1Enabled: true };
+  for (const job of state.jobs) {
+    if (job.slug === "ai-product-manager") job.scopeCardVariant = "scope_card";
+    if (job.slug === "ai-operations-specialist") job.scopeCardVariant = "control";
+    if (job.scopeCardVariant) job.scopeCardAssignedAt = "2026-11-11T09:00:00.000Z";
+  }
+  await page.goto("/");
+  await page.evaluate(([key, value]) => localStorage.setItem(key, value), [
+    STORAGE_KEY,
+    JSON.stringify(state),
+  ] as const);
+  // Hash navigation keeps the in-memory scenario, so reload to read the seeded save.
+  await page.reload();
+}
+async function storedState(page: Page) {
+  return page.evaluate((key) => JSON.parse(localStorage.getItem(key)!), STORAGE_KEY);
+}
+
+test("scope card is reused from the profile and shown to employers only in the scope_card arm", async ({
   page,
 }) => {
+  await seedExperiment(page);
   await choose(page, "Anna Kowalska");
   await page.goto("/#/app/profil");
   const profileCard = page.getByRole("form", { name: "Mój zakres", exact: true });
@@ -1034,17 +1044,16 @@ test("scope card is saved in the profile, reused in an application and shown fir
   await expect(profileCard.getByRole("status")).toHaveText(
     "Karta „Mój zakres” została zapisana w profilu.",
   );
-  await page.reload();
-  await expect(profileCard.getByLabel("Mój własny wkład (opcjonalnie)")).toHaveValue(ownWork);
   await page.goto("/#/app/profil/podglad");
   await expect(page.locator("main")).toContainText(ownWork);
 
+  // scope_card job: the candidate skips the card.
   await page.goto("/#/aplikuj/ai-product-manager");
-  const own = page.getByLabel("Mój własny wkład (wymagane)");
-  await expect(own).toHaveValue(ownWork);
-  await expect(
-    page.getByText("Karta została wypełniona z Twojego profilu.", { exact: false }),
-  ).toBeVisible();
+  await expect(page.getByLabel("Mój własny wkład (opcjonalnie)")).toHaveValue(ownWork);
+  await page.getByRole("button", { name: "Pomiń kartę", exact: true }).click();
+  await expect(page.getByText("Pominięto kartę.", { exact: false })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Wypełnij kartę", exact: true })).toBeFocused();
+  await expect(page.getByLabel("Mój własny wkład (opcjonalnie)")).toHaveCount(0);
   await page
     .getByLabel("Dlaczego pasujesz do tej roli?")
     .fill("Prowadziłam rozwój narzędzi dla zespołów operacyjnych i badania z użytkownikami.");
@@ -1052,36 +1061,58 @@ test("scope card is saved in the profile, reused in an application and shown fir
   await page.getByRole("button", { name: "Wyślij aplikację", exact: true }).click();
   await expect(page.getByText("Aplikacja została wysłana.", { exact: false })).toBeVisible();
 
-  await page.goto("/#/app/profil");
-  await profileCard.getByLabel("Mój własny wkład (opcjonalnie)").fill("Zmieniony opis w profilu.");
-  await profileCard.getByRole("button", { name: "Zapisz kartę", exact: true }).click();
+  // control job: the candidate sees the same section and sends the prefilled card.
+  await page.goto("/#/aplikuj/ai-operations-specialist");
+  await expect(page.getByRole("heading", { name: "Mój zakres", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Mój własny wkład (opcjonalnie)")).toHaveValue(ownWork);
+  await page
+    .getByLabel("Dlaczego pasujesz do tej roli?")
+    .fill("Wdrażałam automatyzacje w zespołach operacyjnych i mierzyłam ich efekty.");
+  await page.getByRole("checkbox").check();
+  await page.getByRole("button", { name: "Wyślij aplikację", exact: true }).click();
+  await expect(page.getByText("Aplikacja została wysłana.", { exact: false })).toBeVisible();
 
   await choose(page, "Karolina Wiśniewska");
   await page.getByRole("link", { name: "Kandydaci", exact: true }).click();
-  await expect(page.locator("main")).toContainText(`Mój własny wkład: ${ownWork}`);
-  await expect(page.locator("main")).toContainText("Mój własny wkład: Przeprowadziłem 12 wywiadów");
-  await page.getByRole("link", { name: "Anna Kowalska", exact: true }).click();
+  const articles = page.locator("main article");
+  const marek = articles.filter({ hasText: "Marek Nowak" });
+  const annaCard = articles.filter({ hasText: "Anna Kowalska" }).filter({
+    hasText: "AI Product Manager",
+  });
+  const annaControl = articles.filter({ hasText: "AI Operations Specialist" });
+  await expect(marek).toContainText("Mój własny wkład: Przeprowadziłem 12 wywiadów");
+  await expect(marek).toContainText("Wkład innych osób: Reguły automatyzacji");
+  await expect(annaCard).toContainText("Mój własny wkład: brak informacji w zgłoszeniu");
+  await expect(annaControl.locator(".application-scope-lines")).toHaveCount(0);
+  await expect(annaControl).not.toContainText(ownWork);
+
+  await annaControl.getByRole("link", { name: "Anna Kowalska" }).click();
   const sheet = page.getByRole("region", { name: "Materiały kandydata", exact: true });
+  await expect(sheet.getByRole("tablist")).toBeVisible();
+  await expect(sheet.getByRole("region", { name: "Mój zakres", exact: true })).toHaveCount(0);
+  await expect(page.locator("main")).not.toContainText(ownWork);
+
+  await page.getByRole("link", { name: "Kandydaci", exact: true }).first().click();
+  await annaCard.getByRole("link", { name: "Anna Kowalska" }).click();
   const card = sheet.getByRole("region", { name: "Mój zakres", exact: true });
-  await expect(card).toContainText(ownWork);
-  await expect(card).not.toContainText("Zmieniony opis w profilu.");
-  await expect(card.locator("dt")).toHaveText([
-    "Projekt i kontekst",
-    "Mój własny wkład",
-    "Wkład innych osób",
-    "Rezultat i czego nie mogę pokazać",
-  ]);
-  await expect(card.locator("dd").nth(2)).toHaveText("brak informacji w zgłoszeniu");
-  expect(
-    await card.evaluate((element) =>
-      Boolean(
-        element.compareDocumentPosition(document.querySelector('[role="tablist"]')!) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
+  await expect(card.locator("dd")).toHaveText(Array(4).fill("brak informacji w zgłoszeniu"));
+  await sheet.getByRole("tab", { name: "CV", exact: true }).click();
+  for (const label of [
+    "W przeglądzie",
+    "Zaproszenie na rozmowę",
+    "Pierwsza rozmowa odbyta",
+    "Kolejny etap",
+  ])
+    await page.getByRole("button", { name: label, exact: true }).click();
+  await expect(page.locator(".record-stage")).toHaveText("Kolejny etap");
+  await expect
+    .poll(async () =>
+      (await storedState(page)).events.some(
+        (x: { event: string; attrs: { place?: string } }) =>
+          x.event === "employer_scope_card_impression" && x.attrs.place === "detail",
       ),
-    ),
-  ).toBe(true);
-  const accessibility = await new AxeBuilder({ page }).include(".recruiting-record").analyze();
-  expect(accessibility.violations).toEqual([]);
+    )
+    .toBe(true);
   for (const width of [390, 320]) {
     await page.setViewportSize({ width, height: 900 });
     await expect(card).toBeVisible();
@@ -1090,4 +1121,64 @@ test("scope card is saved in the profile, reused in an application and shown fir
     );
   }
   await page.screenshot({ path: "artifacts/scope-card-employer-320.png", fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 900 });
+
+  const state = await storedState(page);
+  const jobs = new Map<string, string>(
+    state.jobs.map((x: { id: string; scopeCardVariant?: string }) => [
+      x.id,
+      x.scopeCardVariant ?? "none",
+    ]),
+  );
+  const events: { event: string; publicationId: string; variant: string; attrs: object }[] =
+    state.events;
+  expect(events.every((x) => jobs.get(x.publicationId) === x.variant)).toBe(true);
+  const names = new Set(events.map((x) => x.event));
+  for (const name of [
+    "scope_card_section_viewed",
+    "scope_card_skipped",
+    "application_submitted",
+    "employer_candidate_list_viewed",
+    "employer_application_opened",
+    "employer_tab_opened",
+    "employer_screening_decision",
+    "interview_scheduled",
+    "post_interview_decision_recorded",
+  ])
+    expect(names, name).toContain(name);
+  expect(
+    events
+      .filter((x) => x.event === "employer_scope_card_impression")
+      .every((x) => x.variant === "scope_card"),
+  ).toBe(true);
+  const submittedEvents = events.filter((x) => x.event === "application_submitted");
+  expect(
+    submittedEvents.map((x) => [x.variant, (x.attrs as { has_card: boolean }).has_card]),
+  ).toEqual([
+    ["scope_card", false],
+    ["control", true],
+  ]);
+
+  await choose(page, "Prowadzący");
+  await page.goto("/#/app/case");
+  const report = page.getByRole("region", { name: "Raport na ofertę", exact: true });
+  await expect(report).toContainText("scope_card (z kartą)");
+  await expect(report).toContainText("control (bez karty)");
+  await expect(report).toContainText("bazowy");
+  const accessibility = await new AxeBuilder({ page }).include(".experiment-panel").analyze();
+  expect(accessibility.violations).toEqual([]);
+  await page.setViewportSize({ width: 390, height: 900 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.getByRole("checkbox", { name: /Eksperyment włączony/ }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Stan:" })).toContainText("wyłączony");
+
+  await choose(page, "Karolina Wiśniewska");
+  await page.getByRole("link", { name: "Kandydaci", exact: true }).click();
+  await expect(page.locator(".application-scope-lines")).toHaveCount(0);
+  const after = await storedState(page);
+  expect(
+    after.jobs.find((x: { slug: string }) => x.slug === "ai-product-manager").scopeCardVariant,
+  ).toBe("scope_card");
+  expect(after.events.length).toBeGreaterThanOrEqual(events.length);
 });

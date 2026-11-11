@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { initialState, transition, stateSchema, type State } from "./model";
+import {
+  assignScopeCardVariant,
+  employerSeesScopeCard,
+  metricsCsv,
+  publicationMetrics,
+} from "./experiment";
 const card = {
   project: "Automatyzacja zgłoszeń",
   ownWork: "Przeprowadziłam badania i ustaliłam priorytety.",
@@ -146,7 +152,7 @@ describe("coherent browser scenario", () => {
       transition(state, { type: "publish", job: { ...updated, salaryMin: 500, salaryMax: 1 } }),
     ).toThrow();
   });
-  it("requires own contribution, snapshots the scope card and keeps old saves valid", () => {
+  it("accepts applications without a card, snapshots the card and keeps old saves valid", () => {
     const s = as(initialState(), "candidate-anna");
     const input = {
       type: "submit" as const,
@@ -156,10 +162,15 @@ describe("coherent browser scenario", () => {
       answer: "Approved application with sufficient context.",
       consent: true,
     };
-    expect(() => transition(s, input, time)).toThrow("własny wkład");
-    expect(() => transition(s, { ...input, scopeCard: { ...card, ownWork: "   " } }, time)).toThrow(
-      "własny wkład",
+    const withoutCard = transition(s, input, time, "application-anna");
+    expect(withoutCard.applications.at(-1)?.scopeCard).toBeUndefined();
+    const blank = transition(
+      s,
+      { ...input, scopeCard: { project: " ", ownWork: "", othersWork: "", result: "" } },
+      time,
+      "application-anna",
     );
+    expect(blank.applications.at(-1)?.scopeCard).toBeUndefined();
     let changed = transition(s, { type: "scope_card", value: card });
     expect(changed.people.find((p) => p.id === "candidate-anna")?.scopeCard).toEqual(card);
     changed = transition(changed, { ...input, scopeCard: card }, time, "application-anna");
@@ -185,5 +196,225 @@ describe("coherent browser scenario", () => {
     for (const person of legacy.people) delete person.scopeCard;
     expect(stateSchema.safeParse(legacy).success).toBe(true);
     expect(initialState().applications[0].scopeCard?.ownWork).toContain("12 wywiadów");
+  });
+});
+
+describe("E1 scope card experiment", () => {
+  function publishNew(state: State, id: string) {
+    return transition(
+      as(state, "employer-brightlabs"),
+      {
+        type: "publish",
+        job: { ...state.jobs[0], id, slug: `oferta-${id}`, title: `Oferta ${id}` },
+      },
+      time,
+    );
+  }
+  function enabled() {
+    return transition(as(initialState(), "operator"), { type: "experiment_flag", enabled: true });
+  }
+  it("splits 100 job ids roughly 50/50 and is deterministic", () => {
+    const variants = Array.from({ length: 100 }, (_, i) => assignScopeCardVariant(`job-${i}`));
+    const cards = variants.filter((x) => x === "scope_card").length;
+    expect(cards).toBeGreaterThanOrEqual(40);
+    expect(cards).toBeLessThanOrEqual(60);
+    expect(assignScopeCardVariant("job-7")).toBe(assignScopeCardVariant("job-7"));
+  });
+  it("assigns a variant only while the flag is on and keeps it after edits", () => {
+    expect(() =>
+      transition(as(initialState(), "employer-brightlabs"), {
+        type: "experiment_flag",
+        enabled: true,
+      }),
+    ).toThrow();
+    const off = publishNew(initialState(), "job-off");
+    expect(off.jobs[0].scopeCardVariant).toBe("none");
+    let on = publishNew(enabled(), "job-7");
+    const job = on.jobs[0];
+    expect(job.scopeCardVariant).toBe(assignScopeCardVariant("job-7"));
+    expect(job.scopeCardAssignedAt).toBe(time);
+    on = transition(as(on, "operator"), { type: "experiment_flag", enabled: false });
+    on = transition(as(on, "employer-brightlabs"), {
+      type: "publish",
+      job: { ...job, title: "Zmieniony tytuł", scopeCardVariant: undefined },
+    });
+    expect(on.jobs[0]).toMatchObject({
+      title: "Zmieniony tytuł",
+      scopeCardVariant: job.scopeCardVariant,
+      scopeCardAssignedAt: time,
+    });
+    expect(initialState().jobs.every((x) => x.scopeCardVariant === undefined)).toBe(true);
+  });
+  it("shows the card to employers only for scope_card jobs while the flag is on", () => {
+    const s = enabled();
+    s.jobs[0].scopeCardVariant = "scope_card";
+    s.jobs[1].scopeCardVariant = "control";
+    expect(employerSeesScopeCard(s, s.jobs[0].id)).toBe(true);
+    expect(employerSeesScopeCard(s, s.jobs[1].id)).toBe(false);
+    expect(employerSeesScopeCard(s, s.jobs[2].id)).toBe(false);
+    const off = transition(as(s, "operator"), { type: "experiment_flag", enabled: false });
+    expect(employerSeesScopeCard(off, off.jobs[0].id)).toBe(false);
+    expect(off.jobs[0].scopeCardVariant).toBe("scope_card");
+  });
+  it("keeps the submitted card character for character and records the summary source", () => {
+    const typed = {
+      project: "  Projekt „Ala” — 1/2 ",
+      ownWork: "Zrobiłam: A; B & C.\nDruga linia",
+      othersWork: "",
+      result: "",
+    };
+    const s = transition(
+      as(initialState(), "candidate-anna"),
+      {
+        type: "submit",
+        jobId: initialState().jobs[1].id,
+        notes: "",
+        generated: "",
+        answer: "Approved application with sufficient context.",
+        scopeCard: typed,
+        consent: true,
+      },
+      time,
+      "application-anna",
+    );
+    const saved = s.applications.at(-1)!;
+    expect(saved.scopeCard).toEqual({ ...typed, project: typed.project.trim() });
+    expect(saved.summarySource).toBe("scenario_fixture");
+    expect(saved.summary).toBe(initialState().people[0].exampleSummary);
+  });
+  it("records the candidate → employer event path with publication and variant", () => {
+    let s = enabled();
+    s.jobs[0].scopeCardVariant = "scope_card";
+    const jobId = s.jobs[0].id;
+    s = as(s, "candidate-anna");
+    s = transition(
+      s,
+      {
+        type: "log_event",
+        event: "scope_card_section_viewed",
+        jobId,
+        attrs: { prefilled_from_profile: false },
+      },
+      time,
+    );
+    s = transition(
+      s,
+      {
+        type: "submit",
+        jobId,
+        notes: "",
+        generated: "",
+        answer: "Approved application with sufficient context.",
+        scopeCard: card,
+        consent: true,
+      },
+      time,
+      "application-anna",
+    );
+    s = as(s, "employer-brightlabs");
+    for (const stage of [
+      "reviewed",
+      "interview_invited",
+      "first_conversation_held",
+      "continued",
+    ] as const)
+      s = transition(
+        s,
+        { type: "stage", applicationId: "application-anna", stage, note: "" },
+        time,
+      );
+    const events = s.events ?? [];
+    expect(events.map((x) => x.event)).toEqual([
+      "scope_card_section_viewed",
+      "application_submitted",
+      "employer_screening_decision",
+      "employer_screening_decision",
+      "interview_scheduled",
+      "post_interview_decision_recorded",
+    ]);
+    expect(events.every((x) => x.publicationId === jobId && x.variant === "scope_card")).toBe(true);
+    expect(events[1].attrs).toMatchObject({
+      has_card: true,
+      card_fields_filled: 2,
+      card_own_contribution_chars: card.ownWork.length,
+      card_saved_to_profile: false,
+      writing_assistant_used: false,
+    });
+    expect(
+      events.filter((x) => x.event === "employer_screening_decision").map((x) => x.attrs.decision),
+    ).toEqual(["hold", "invite"]);
+    expect(events.at(-1)?.attrs).toMatchObject({ decision: "continue", has_card: true });
+    expect(() =>
+      transition(s, { type: "log_event", event: "employer_tab_opened", applicationId: "missing" }),
+    ).toThrow();
+  });
+  it("reports one row per job for both arms and the baseline", () => {
+    let s = enabled();
+    s.jobs[0].scopeCardVariant = "scope_card";
+    s.jobs[1].scopeCardVariant = "control";
+    s = transition(
+      as(s, "candidate-anna"),
+      {
+        type: "submit",
+        jobId: s.jobs[0].id,
+        notes: "",
+        generated: "",
+        answer: "Approved application with sufficient context.",
+        scopeCard: card,
+        consent: true,
+      },
+      "2026-11-03T10:00:00.000Z",
+      "application-anna",
+    );
+    s = transition(s, {
+      type: "log_event",
+      event: "application_form_abandoned",
+      jobId: s.jobs[1].id,
+      attrs: { reached_scope_card_section: true },
+    });
+    s = as(s, "employer-brightlabs");
+    for (const stage of [
+      "reviewed",
+      "interview_invited",
+      "first_conversation_held",
+      "continued",
+    ] as const)
+      s = transition(
+        s,
+        { type: "stage", applicationId: "application-anna", stage, note: "" },
+        "2026-11-04T10:00:00.000Z",
+      );
+    s = transition(
+      s,
+      { type: "stage", applicationId: "application-example", stage: "rejected", note: "" },
+      "2026-11-04T10:00:00.000Z",
+    );
+    const rows = publicationMetrics(s);
+    expect(rows).toHaveLength(s.jobs.length);
+    const cardRow = rows.find((x) => x.publicationId === s.jobs[0].id)!;
+    expect(cardRow).toMatchObject({
+      period: "eksperyment",
+      scopeCardVariant: "scope_card",
+      nApplications: 2,
+      nWithCard: 2,
+      pctScreened: 100,
+      nInvited: 1,
+      pctInvited: 50,
+      nInterviews: 1,
+      nContinue: 1,
+      pctContinueOfInterviews: 100,
+      pctContinueOfInterviewsWithCard: 100,
+    });
+    expect(cardRow.daysToFirstInterview).toBeGreaterThan(0);
+    expect(rows.find((x) => x.publicationId === s.jobs[1].id)).toMatchObject({
+      scopeCardVariant: "control",
+      nApplications: 0,
+      pctContinueOfInterviews: null,
+      nAbandonedForms: 1,
+    });
+    expect(rows.find((x) => x.publicationId === s.jobs[2].id)?.period).toBe("bazowy");
+    const csv = metricsCsv(rows).split("\n");
+    expect(csv[0]).toContain("pct_continue_of_interviews_with_card");
+    expect(csv).toHaveLength(rows.length + 1);
   });
 });

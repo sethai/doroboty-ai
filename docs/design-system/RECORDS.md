@@ -6,14 +6,15 @@ These components implement the shared employer and candidate process-view compos
 
 Owner: src/components/record-sheet.tsx; styles: src/app/records.css.
 
-| Prop       | Contract                                                                                                                                                                                     |
-| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| label      | Accessible section and tab-list name.                                                                                                                                                        |
-| lead       | Optional content rendered before the tabs, inside the same surface and separated by a rule. Used for the candidate-authored scope card („Mój zakres”), which must be read before the answer. |
-| sections   | Nonempty array of unique `{ value, label, content }` entries. Labels are concise; content supplies its section heading and reading content. First section is initially active.               |
-| attachment | Optional persistent file row outside the changing panels.                                                                                                                                    |
-| children   | Optional integrated editor/supporting section, independent of panel mounting.                                                                                                                |
-| footer     | Optional actions or terminal-state explanation.                                                                                                                                              |
+| Prop          | Contract                                                                                                                                                                                     |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| label         | Accessible section and tab-list name.                                                                                                                                                        |
+| lead          | Optional content rendered before the tabs, inside the same surface and separated by a rule. Used for the candidate-authored scope card („Mój zakres”), which must be read before the answer. |
+| sections      | Nonempty array of unique `{ value, label, content }` entries. Labels are concise; content supplies its section heading and reading content. First section is initially active.               |
+| attachment    | Optional persistent file row outside the changing panels.                                                                                                                                    |
+| children      | Optional integrated editor/supporting section, independent of panel mounting.                                                                                                                |
+| onValueChange | Optional callback with the newly selected section value (used for the local E1 tab event).                                                                                                   |
+| footer        | Optional actions or terminal-state explanation.                                                                                                                                              |
 
 Use one outlined surface for related submitted materials, editing and decisions. The sheet includes a visually hidden H2 from its label; the application answer, submitted CV and recruiter note use the existing 26px H3 scale, retaining section spacing and the associated textarea label. Do not wrap each section in another panel. Base UI Tabs owns selection, roving focus, arrows/Home/End and panel relationships; selection follows keyboard focus because all content is local; tabs compose the existing Button via `render`. Base UI owns active-panel mounting; an exiting panel may briefly remain inert during its lifecycle. Select panels by their accessible tab name in tests rather than assuming there is always exactly one panel node. Keep unsaved notes outside panels so switching tabs preserves them. Panels remain keyboard reachable. Long content wraps and retains line breaks; buttons wrap labels at small widths.
 
@@ -60,3 +61,5 @@ Owner: src/features/prototype/match-score.tsx; host styles: src/app/poster-peopl
 ## ScopeCardFacts and ScopeCardEditor
 
 Owner: [scope-card.tsx](../../src/features/prototype/scope-card.tsx); styles: src/app/records.css. `ScopeCardFacts` renders the shared four-field card as an H3 „Mój zakres” plus `dl/dt/dd` on a paper (`--pp-paper`) inset with r18 and no second contour; fields flow into as many ≥260px columns as fit and stack on narrow sheets. Empty fields remain visible with „brak informacji w zgłoszeniu” in muted italic. `ScopeCardEditor` renders the same fields as labelled textareas with hints (`aria-describedby`), an optional required own-contribution flag, inline error and focus ref. Profile, application form, both record views and the employer list use these owners; field labels come from `scopeCardFields` in the domain model. This is a host extension composed from existing recipes, not a v1 kit component.
+
+`ApplicationRecord` takes `showScopeCard` (default true; the employer controller passes the E1 visibility rule), `onScopeCardVisible` (called once after the card was in view for one second) and `onTabChange`. Hiding the card removes the lead slot entirely, so `control`/`none` records match the pre-card sheet. The employer list uses the same visibility rule for its two scope lines.

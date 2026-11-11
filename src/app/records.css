@@ -403,7 +403,9 @@
   font-size: 15px;
   line-height: 1.7;
 }
-.application-scope-line {
+.application-scope-lines {
+  display: grid;
+  gap: 6px;
   margin-top: 16px;
   font-size: 15px;
   line-height: 1.65;
@@ -413,4 +415,68 @@
   .scope-card {
     padding: 18px;
   }
+}
+.scope-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+/* E1 experiment panel on the instructor page (host extension). */
+.experiment-panel h3 {
+  margin-top: 12px;
+  font-size: 26px;
+}
+.experiment-flag {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  font-size: 14px;
+  line-height: 1.6;
+  cursor: pointer;
+}
+.experiment-flag [data-slot="checkbox"] {
+  margin-top: 2px;
+}
+.experiment-status {
+  font-size: 14px;
+  font-weight: 600;
+}
+.experiment-steps {
+  display: grid;
+  gap: 6px;
+  padding-left: 22px;
+  list-style: decimal;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.experiment-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--pp-ink);
+  border-radius: var(--pp-radius);
+  background: var(--pp-surface);
+}
+.experiment-table-scroll:focus-visible {
+  outline: 2px solid var(--pp-ink);
+  outline-offset: 2px;
+}
+.experiment-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.experiment-table th {
+  background: var(--pp-paper);
+  font-weight: 600;
+}
+.experiment-table th,
+.experiment-table td {
+  padding: 10px 14px;
+  white-space: nowrap;
+}
+.experiment-table tbody tr {
+  border-top: 1px solid var(--pp-line);
 }

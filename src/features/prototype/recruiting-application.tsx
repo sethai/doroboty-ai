@@ -1,7 +1,8 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ApplicationRecord } from "./application-record";
+import { employerSeesScopeCard, hasScopeCard } from "./experiment";
 import { nextStages, stageLabels, type Application } from "./model";
 import { usePrototype } from "./store";
 
@@ -13,6 +14,20 @@ export function RecruitingApplication({ application }: { application: Applicatio
   const pendingFocus = useRef(false);
   const company = state.companies.find((item) => item.id === application.companyId);
   const availableStages = nextStages[application.stage];
+  const showScopeCard = employerSeesScopeCard(state, application.jobId);
+  const opened = useRef(false);
+  useEffect(() => {
+    if (opened.current) return;
+    opened.current = true;
+    run({
+      type: "log_event",
+      event: "employer_application_opened",
+      applicationId: application.id,
+      attrs: { has_card: hasScopeCard(application) },
+    });
+    // Logged once per visit of this record.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useLayoutEffect(() => {
     if (pendingFocus.current) {
@@ -28,6 +43,23 @@ export function RecruitingApplication({ application }: { application: Applicatio
         companyName={company?.name ?? ""}
         audience="employer"
         history={application.events}
+        showScopeCard={showScopeCard}
+        onScopeCardVisible={() =>
+          run({
+            type: "log_event",
+            event: "employer_scope_card_impression",
+            applicationId: application.id,
+            attrs: { place: "detail" },
+          })
+        }
+        onTabChange={(tab) =>
+          run({
+            type: "log_event",
+            event: "employer_tab_opened",
+            applicationId: application.id,
+            attrs: { tab },
+          })
+        }
         statusRef={statusRef}
         footer={
           availableStages.length > 0 ? (
