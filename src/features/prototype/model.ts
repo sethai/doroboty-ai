@@ -59,6 +59,42 @@ export const jobSchema = z
       job.salaryMin === undefined || job.salaryMax === undefined || job.salaryMin <= job.salaryMax,
     { path: ["salaryMax"], message: "Salary maximum must not be below minimum" },
   );
+const scopeText = z.string().trim().max(1000);
+/** Candidate-authored scope card ("Mój zakres"); reaches the employer exactly as typed. */
+export const scopeCardSchema = z.object({
+  project: scopeText,
+  ownWork: scopeText,
+  othersWork: scopeText,
+  result: scopeText,
+});
+export type ScopeCard = z.infer<typeof scopeCardSchema>;
+export const submittedScopeCardSchema = scopeCardSchema.extend({
+  ownWork: scopeText.min(1, "Opisz swój własny wkład."),
+});
+export const scopeCardFields = [
+  {
+    key: "project",
+    label: "Projekt i kontekst",
+    hint: "Czego dotyczył projekt, dla kogo i w jakim zespole.",
+  },
+  {
+    key: "ownWork",
+    label: "Mój własny wkład",
+    hint: "Co zrobiłeś(-aś) samodzielnie: decyzje, analizy, kod, rozmowy.",
+  },
+  {
+    key: "othersWork",
+    label: "Wkład innych osób",
+    hint: "Co robili inni i czego nie robiłeś(-aś) sam(a).",
+  },
+  {
+    key: "result",
+    label: "Rezultat i czego nie mogę pokazać",
+    hint: "Wynik, liczby lub szczegóły oraz materiały, których nie możesz udostępnić.",
+  },
+] as const satisfies readonly { key: keyof ScopeCard; label: string; hint: string }[];
+export const SCOPE_CARD_EMPTY_TEXT = "brak informacji w zgłoszeniu";
+export const emptyScopeCard: ScopeCard = { project: "", ownWork: "", othersWork: "", result: "" };
 export const profileSchema = z.object({
   name: shortText,
   headline: shortText,
@@ -72,6 +108,7 @@ const personSchema = profileSchema.extend({
   cv: text,
   exampleScore: z.number().int().min(0).max(100),
   exampleSummary: text,
+  scopeCard: scopeCardSchema.optional(),
 });
 export const stages = [
   "submitted",
@@ -115,6 +152,7 @@ const applicationSchema = z.object({
   answer: text.min(MIN_APPLICATION_ANSWER_LENGTH),
   sourceNotes: text,
   generatedAnswer: text,
+  scopeCard: scopeCardSchema.optional(),
   score: z.number().int().min(0).max(100),
   summary: text,
   stage: z.enum(stages),
@@ -129,6 +167,7 @@ const draftSchema = z.object({
   notes: text,
   generated: text,
   answer: text,
+  scopeCard: scopeCardSchema.optional(),
 });
 export const stateSchema = z
   .object({
@@ -201,13 +240,22 @@ export type Action =
   | { type: "select_person"; id: string | null }
   | { type: "profile"; value: z.infer<typeof profileSchema> }
   | { type: "toggle_saved"; jobId: string }
-  | { type: "draft"; jobId: string; notes: string; generated: string; answer: string }
+  | { type: "scope_card"; value: ScopeCard }
+  | {
+      type: "draft";
+      jobId: string;
+      notes: string;
+      generated: string;
+      answer: string;
+      scopeCard?: ScopeCard;
+    }
   | {
       type: "submit";
       jobId: string;
       notes: string;
       generated: string;
       answer: string;
+      scopeCard?: ScopeCard;
       consent: boolean;
     }
   | { type: "stage"; applicationId: string; stage: Stage; note: string }
@@ -239,6 +287,7 @@ export function initialState(): State {
       "Pracowałem nad automatyzacją obsługi zgłoszeń. Poprowadziłem badania z użytkownikami i wdrożenie, które skróciło czas odpowiedzi o 25%. Chętnie opowiem o decyzjach i ograniczeniach tego projektu.",
     sourceNotes: "",
     generatedAnswer: "",
+    scopeCard: bob.scopeCard,
     score: bob.exampleScore,
     summary: bob.exampleSummary,
     stage: "submitted",
@@ -280,6 +329,8 @@ export function transition(
     s.activePersonId = action.id;
   } else if (action.type === "profile")
     Object.assign(candidate(), profileSchema.parse(action.value));
+  else if (action.type === "scope_card")
+    candidate().scopeCard = scopeCardSchema.parse(action.value);
   else if (action.type === "toggle_saved") {
     const p = candidate();
     if (!s.jobs.some((x) => x.id === action.jobId)) fail("Nie znaleziono oferty.");
@@ -296,6 +347,8 @@ export function transition(
     const job = s.jobs.find((x) => x.id === action.jobId && x.publicationStatus === "published");
     if (!job) return fail("Oferta nie jest dostępna.");
     if (!action.consent) fail("Zatwierdź treść i zgodę na przesłanie aplikacji.");
+    const scopeCard = submittedScopeCardSchema.safeParse(action.scopeCard ?? emptyScopeCard);
+    if (!scopeCard.success) return fail("Opisz swój własny wkład w karcie „Mój zakres”.");
     if (s.applications.some((x) => x.candidateId === p.id && x.jobId === job.id))
       fail("Aplikacja na tę ofertę została już wysłana.");
     s.applications.push(
@@ -310,6 +363,7 @@ export function transition(
         answer: action.answer,
         sourceNotes: action.notes,
         generatedAnswer: action.generated,
+        scopeCard: scopeCard.data,
         score: p.exampleScore,
         summary: p.exampleSummary,
         stage: "submitted",

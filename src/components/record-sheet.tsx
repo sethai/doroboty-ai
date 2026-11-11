@@ -7,12 +7,14 @@ type RecordSection = { value: string; label: string; content: ReactNode };
 export function RecordSheet({
   label,
   sections,
+  lead,
   attachment,
   children,
   footer,
 }: {
   label: string;
   sections: RecordSection[];
+  lead?: ReactNode;
   attachment?: ReactNode;
   children?: ReactNode;
   footer?: ReactNode;
@@ -20,6 +22,7 @@ export function RecordSheet({
   return (
     <section className="record-sheet" aria-label={label}>
       <h2 className="sr-only">{label}</h2>
+      {lead && <div className="record-lead">{lead}</div>}
       <Tabs.Root defaultValue={sections[0]?.value}>
         <Tabs.List className="record-tabs" aria-label={label} activateOnFocus>
           {sections.map((section) => (

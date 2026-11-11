@@ -7,9 +7,14 @@ async function choose(page: Page, name: string) {
   await page.goto("/#/auth/sign-in");
   await page.getByRole("button", { name: `Wejdź jako ${name}`, exact: true }).click();
 }
+const ownWork = "Przeprowadziłam 18 wywiadów z użytkownikami i ustaliłam priorytety wdrożenia.";
+async function fillOwnWork(page: Page) {
+  await page.getByLabel("Mój własny wkład (wymagane)").fill(ownWork);
+}
 async function application(page: Page) {
   await choose(page, "Anna Kowalska");
   await page.goto("/#/aplikuj/ai-product-manager");
+  await fillOwnWork(page);
   await page
     .getByLabel("Dlaczego pasujesz do tej roli?")
     .fill(
@@ -62,6 +67,7 @@ for (const [name, filename] of [
       "target",
       "_blank",
     );
+    await fillOwnWork(page);
     await page
       .getByLabel("Dlaczego pasujesz do tej roli?")
       .fill("Mam doświadczenie w rozwoju produktów i automatyzacji obsługi zgłoszeń.");
@@ -123,12 +129,13 @@ test("published job → saved offer/draft → submitted application → employer
   await expect(page.getByLabel("Twoje notatki do aplikacji (opcjonalnie)")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Przygotuj propozycję z AI" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Użyj propozycji" })).toHaveCount(0);
+  await fillOwnWork(page);
   await answer.fill(draftAnswer);
   await page.getByRole("button", { name: "Zapisz szkic" }).click();
   await expect(page.getByRole("status")).toHaveText("Szkic został zapisany.");
   expect(
     await page.evaluate((key) => JSON.parse(localStorage.getItem(key)!).drafts.at(-1), STORAGE_KEY),
-  ).toMatchObject({ notes: "", generated: "", answer: draftAnswer });
+  ).toMatchObject({ notes: "", generated: "", answer: draftAnswer, scopeCard: { ownWork } });
   await page.reload();
   await expect(answer).toHaveValue(draftAnswer);
   await page.getByRole("checkbox").check();
@@ -321,7 +328,19 @@ test("application submission explains short answers and missing approval without
   await page.goto("/#/aplikuj/ai-product-manager");
   const answer = page.getByLabel("Dlaczego pasujesz do tej roli?");
   const send = page.getByRole("button", { name: "Wyślij aplikację", exact: true });
+  const own = page.getByLabel("Mój własny wkład (wymagane)");
   await answer.fill("krótka odpowiedź");
+  await send.click();
+  // Every missing requirement is shown at once; focus goes to the first invalid field.
+  await expect(page.getByRole("alert")).toHaveText([
+    "Opisz swój własny wkład. To pole jest wymagane przed wysłaniem.",
+    /Odpowiedź jest za krótka/,
+    "Zatwierdź treść aplikacji i jej przesłanie pracodawcy.",
+  ]);
+  await expect(own).toBeFocused();
+  await expect(own).toHaveAttribute("aria-invalid", "true");
+  await expect(answer).toHaveValue("krótka odpowiedź");
+  await own.fill(ownWork);
   await page.getByRole("checkbox").check();
   await expect(send).toBeEnabled();
   await send.click();
@@ -370,7 +389,8 @@ for (const width of [1440, 375]) {
     const form = page.locator("main form");
     const answer = page.getByLabel("Dlaczego pasujesz do tej roli?");
     await expect(answer).toHaveValue(draft.answer);
-    await expect(form.getByRole("textbox")).toHaveCount(1);
+    // The answer plus the four candidate-authored scope card fields; no legacy notes field.
+    await expect(form.getByRole("textbox")).toHaveCount(5);
     await expect(page.getByLabel("Twoje notatki do aplikacji (opcjonalnie)")).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Przygotuj propozycję z AI" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Użyj propozycji" })).toHaveCount(0);
@@ -396,6 +416,7 @@ for (const width of [1440, 375]) {
     await page.keyboard.press("Tab");
     await expect(page.getByRole("button", { name: "Zapisz szkic", exact: true })).toBeFocused();
     const editedAnswer = "Moja poprawiona odpowiedź opisuje doświadczenie potrzebne w tej roli.";
+    await fillOwnWork(page);
     await answer.fill(editedAnswer);
     await page.keyboard.press("Tab");
     await page.keyboard.press("Tab");
@@ -407,7 +428,11 @@ for (const width of [1440, 375]) {
         (key) => JSON.parse(localStorage.getItem(key)!).drafts.at(-1),
         STORAGE_KEY,
       ),
-    ).toEqual({ ...draft, answer: editedAnswer });
+    ).toEqual({
+      ...draft,
+      answer: editedAnswer,
+      scopeCard: { project: "", ownWork, othersWork: "", result: "" },
+    });
     await page.reload();
     await expect(answer).toHaveValue(editedAnswer);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
@@ -846,6 +871,7 @@ for (const reducedMotion of ["no-preference", "reduce"] as const) {
     await choose(page, "Anna Kowalska");
     await page.goto("/#/aplikuj/ai-product-manager");
     const answer = page.getByLabel("Dlaczego pasujesz do tej roli?");
+    await fillOwnWork(page);
     await answer.fill("krótko");
     await page.getByRole("button", { name: "Wyślij aplikację", exact: true }).click();
     await expect(
@@ -994,4 +1020,74 @@ test("candidate snapshot supports custom CV and long content at desktop and mobi
   await expect(page.getByRole("tabpanel", { name: "Odpowiedź", exact: true })).toContainText(
     record.answer,
   );
+});
+
+test("scope card is saved in the profile, reused in an application and shown first to the employer", async ({
+  page,
+}) => {
+  await choose(page, "Anna Kowalska");
+  await page.goto("/#/app/profil");
+  const profileCard = page.getByRole("form", { name: "Mój zakres", exact: true });
+  await profileCard.getByLabel("Projekt i kontekst (opcjonalnie)").fill("Asystent do zgłoszeń");
+  await profileCard.getByLabel("Mój własny wkład (opcjonalnie)").fill(ownWork);
+  await profileCard.getByRole("button", { name: "Zapisz kartę", exact: true }).click();
+  await expect(profileCard.getByRole("status")).toHaveText(
+    "Karta „Mój zakres” została zapisana w profilu.",
+  );
+  await page.reload();
+  await expect(profileCard.getByLabel("Mój własny wkład (opcjonalnie)")).toHaveValue(ownWork);
+  await page.goto("/#/app/profil/podglad");
+  await expect(page.locator("main")).toContainText(ownWork);
+
+  await page.goto("/#/aplikuj/ai-product-manager");
+  const own = page.getByLabel("Mój własny wkład (wymagane)");
+  await expect(own).toHaveValue(ownWork);
+  await expect(
+    page.getByText("Karta została wypełniona z Twojego profilu.", { exact: false }),
+  ).toBeVisible();
+  await page
+    .getByLabel("Dlaczego pasujesz do tej roli?")
+    .fill("Prowadziłam rozwój narzędzi dla zespołów operacyjnych i badania z użytkownikami.");
+  await page.getByRole("checkbox").check();
+  await page.getByRole("button", { name: "Wyślij aplikację", exact: true }).click();
+  await expect(page.getByText("Aplikacja została wysłana.", { exact: false })).toBeVisible();
+
+  await page.goto("/#/app/profil");
+  await profileCard.getByLabel("Mój własny wkład (opcjonalnie)").fill("Zmieniony opis w profilu.");
+  await profileCard.getByRole("button", { name: "Zapisz kartę", exact: true }).click();
+
+  await choose(page, "Karolina Wiśniewska");
+  await page.getByRole("link", { name: "Kandydaci", exact: true }).click();
+  await expect(page.locator("main")).toContainText(`Mój własny wkład: ${ownWork}`);
+  await expect(page.locator("main")).toContainText("Mój własny wkład: Przeprowadziłem 12 wywiadów");
+  await page.getByRole("link", { name: "Anna Kowalska", exact: true }).click();
+  const sheet = page.getByRole("region", { name: "Materiały kandydata", exact: true });
+  const card = sheet.getByRole("region", { name: "Mój zakres", exact: true });
+  await expect(card).toContainText(ownWork);
+  await expect(card).not.toContainText("Zmieniony opis w profilu.");
+  await expect(card.locator("dt")).toHaveText([
+    "Projekt i kontekst",
+    "Mój własny wkład",
+    "Wkład innych osób",
+    "Rezultat i czego nie mogę pokazać",
+  ]);
+  await expect(card.locator("dd").nth(2)).toHaveText("brak informacji w zgłoszeniu");
+  expect(
+    await card.evaluate((element) =>
+      Boolean(
+        element.compareDocumentPosition(document.querySelector('[role="tablist"]')!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      ),
+    ),
+  ).toBe(true);
+  const accessibility = await new AxeBuilder({ page }).include(".recruiting-record").analyze();
+  expect(accessibility.violations).toEqual([]);
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect(card).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+  }
+  await page.screenshot({ path: "artifacts/scope-card-employer-320.png", fullPage: true });
 });

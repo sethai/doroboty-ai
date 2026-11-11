@@ -337,3 +337,80 @@
   border-radius: 10px;
   background: var(--gui-canvas);
 }
+
+/* Scope card ("Mój zakres"): candidate-authored facts shown before submitted materials. */
+.record-lead {
+  padding-bottom: 24px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--pp-line);
+}
+.scope-card {
+  min-width: 0;
+  padding: 22px 24px;
+  border-radius: var(--pp-radius);
+  background: var(--pp-paper);
+}
+.scope-card h3 {
+  margin-bottom: 14px;
+}
+.scope-card-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 18px 28px;
+  margin: 0;
+}
+.scope-card-facts > div {
+  min-width: 0;
+}
+.scope-card-facts dt {
+  margin-bottom: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--pp-ink);
+}
+.scope-card-facts dd {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.scope-card-facts dd[data-empty] {
+  color: var(--pp-muted);
+  font-style: italic;
+}
+.scope-card-editor {
+  display: grid;
+  gap: 20px;
+  margin-block: 18px;
+}
+.scope-card-editor .field > label {
+  font-size: 15px;
+  font-weight: 600;
+}
+.scope-card-hint,
+.scope-card-intro {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--gui-text-muted);
+}
+.scope-card-hint {
+  margin-top: -5px;
+}
+.scope-card-editor textarea {
+  min-height: 84px;
+  font-size: 15px;
+  line-height: 1.7;
+}
+.application-scope-line {
+  margin-top: 16px;
+  font-size: 15px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 700px) {
+  .scope-card {
+    padding: 18px;
+  }
+}

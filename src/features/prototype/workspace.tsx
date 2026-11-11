@@ -10,7 +10,16 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { JobCard } from "@/features/jobs/job-card";
 import { ApplicationOfferPreview } from "@/features/jobs/application-offer-preview";
 import { usePrototype } from "./store";
-import { currentPerson, publishedJobs, stageLabels, MIN_APPLICATION_ANSWER_LENGTH } from "./model";
+import {
+  currentPerson,
+  emptyScopeCard,
+  publishedJobs,
+  SCOPE_CARD_EMPTY_TEXT,
+  stageLabels,
+  MIN_APPLICATION_ANSWER_LENGTH,
+  type ScopeCard,
+} from "./model";
+import { ScopeCardEditor, ScopeCardFacts } from "./scope-card";
 import { PageTitle, Empty, NotFound, Notice } from "./shell";
 import { CvAttachment } from "./cv-attachment";
 import { MatchScore } from "./match-score";
@@ -143,6 +152,13 @@ export function ProfilePage({ preview = false }: { preview?: boolean }) {
   const { state, run } = usePrototype();
   const person = currentPerson(state)!;
   const [message, setMessage] = useState("");
+  const [scopeCard, setScopeCard] = useState<ScopeCard>(person.scopeCard ?? emptyScopeCard);
+  const [scopeMessage, setScopeMessage] = useState("");
+  function saveScopeCard(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (run({ type: "scope_card", value: scopeCard }))
+      setScopeMessage("Karta „Mój zakres” została zapisana w profilu.");
+  }
   function save(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const data = new FormData(e.currentTarget);
@@ -178,6 +194,9 @@ export function ProfilePage({ preview = false }: { preview?: boolean }) {
           <h2>{person.headline}</h2>
           <p>{person.location}</p>
           <p>{person.bio}</p>
+          {person.role === "candidate" && (
+            <ScopeCardFacts card={person.scopeCard} id="profile-scope-card" />
+          )}
         </div>
       ) : (
         <form onSubmit={save} className="prototype-panel prototype-form">
@@ -195,6 +214,22 @@ export function ProfilePage({ preview = false }: { preview?: boolean }) {
           </Field>
           <Button type="submit">Zapisz profil</Button>
           {message && <p role="status">{message}</p>}
+        </form>
+      )}
+      {!preview && person.role === "candidate" && (
+        <form
+          onSubmit={saveScopeCard}
+          className="prototype-panel prototype-form profile-scope-card mt-6"
+          aria-labelledby="profile-scope-title"
+        >
+          <h2 id="profile-scope-title">Mój zakres</h2>
+          <p className="scope-card-intro">
+            Opisz raz jeden projekt i swój wkład. Karta wypełni się przy kolejnych aplikacjach, a
+            pracodawca zobaczy ją na górze zgłoszenia dokładnie w tej formie.
+          </p>
+          <ScopeCardEditor value={scopeCard} onChange={setScopeCard} idPrefix="profile-scope" />
+          <Button type="submit">Zapisz kartę</Button>
+          {scopeMessage && <p role="status">{scopeMessage}</p>}
         </form>
       )}
       <section className="prototype-panel mt-6">
@@ -239,6 +274,10 @@ export function ApplyPage() {
   const notes = draft?.notes ?? "";
   const generated = draft?.generated ?? "";
   const [answer, setAnswer] = useState(draft?.answer ?? "");
+  const [scopeCard, setScopeCard] = useState<ScopeCard>(
+    draft?.scopeCard ?? person.scopeCard ?? emptyScopeCard,
+  );
+  const ownWorkInput = useRef<HTMLTextAreaElement>(null);
   const [consent, setConsent] = useState(false);
   const [message, setMessage] = useState("");
   const [attempted, setAttempted] = useState(false);
@@ -255,6 +294,7 @@ export function ApplyPage() {
   }, [submitted, navigate]);
   const answerLength = answer.trim().length;
   const answerInvalid = attempted && answerLength < MIN_APPLICATION_ANSWER_LENGTH;
+  const ownWorkInvalid = attempted && !scopeCard.ownWork.trim();
   const consentInvalid = attempted && !consent;
   if (!job) return <NotFound />;
   const existing = state.applications.find(
@@ -273,6 +313,10 @@ export function ApplyPage() {
     e.preventDefault();
     if (submittedOnce.current) return;
     setAttempted(true);
+    if (!scopeCard.ownWork.trim()) {
+      ownWorkInput.current?.focus();
+      return;
+    }
     if (answerLength < MIN_APPLICATION_ANSWER_LENGTH) {
       answerInput.current?.focus();
       return;
@@ -281,7 +325,7 @@ export function ApplyPage() {
       document.getElementById("application-consent")?.focus();
       return;
     }
-    if (run({ type: "submit", jobId: job!.id, notes, generated, answer, consent })) {
+    if (run({ type: "submit", jobId: job!.id, notes, generated, answer, scopeCard, consent })) {
       submittedOnce.current = true;
       setSubmitted(true);
       if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
@@ -321,6 +365,49 @@ export function ApplyPage() {
               layout="row"
               contextLabel="CV z Twojego profilu"
             />
+          </section>
+          <section
+            className="application-form-section application-scope"
+            aria-labelledby="application-scope-title"
+          >
+            <h3 id="application-scope-title">Mój zakres</h3>
+            <p className="application-help">
+              Opisz jeden projekt i swój wkład. Pracodawca zobaczy tę kartę na górze zgłoszenia,
+              przed Twoją odpowiedzią — dokładnie w tej formie, bez przepisywania.
+            </p>
+            {person.scopeCard && !draft?.scopeCard && (
+              <p className="application-help">
+                Karta została wypełniona z Twojego profilu. Zmiany tutaj dotyczą tylko tej
+                aplikacji, dopóki nie zapiszesz ich w profilu.
+              </p>
+            )}
+            <ScopeCardEditor
+              value={scopeCard}
+              onChange={(value) => {
+                setScopeCard(value);
+                setConsent(false);
+              }}
+              idPrefix="application-scope"
+              disabled={submitted}
+              ownWorkRequired
+              ownWorkRef={ownWorkInput}
+              ownWorkError={
+                ownWorkInvalid
+                  ? "Opisz swój własny wkład. To pole jest wymagane przed wysłaniem."
+                  : undefined
+              }
+            />
+            <Button
+              type="button"
+              variant="outline"
+              disabled={submitted}
+              onClick={() => {
+                if (run({ type: "scope_card", value: scopeCard }))
+                  setMessage("Karta „Mój zakres” została zapisana w profilu.");
+              }}
+            >
+              Zapisz kartę w profilu
+            </Button>
           </section>
           <section
             className="application-form-section application-answer"
@@ -387,7 +474,7 @@ export function ApplyPage() {
                 disabled={submitted}
                 variant="outline"
                 onClick={() => {
-                  if (run({ type: "draft", jobId: job.id, notes, generated, answer }))
+                  if (run({ type: "draft", jobId: job.id, notes, generated, answer, scopeCard }))
                     setMessage("Szkic został zapisany.");
                 }}
               >
@@ -454,6 +541,12 @@ export function ApplicationsPage({ employer = false }: { employer?: boolean }) {
                 </div>
                 <MatchScore score={a.score} />
               </div>
+              {employer && (
+                <p className="application-scope-line">
+                  <strong>Mój własny wkład:</strong>{" "}
+                  {a.scopeCard?.ownWork.trim() || SCOPE_CARD_EMPTY_TEXT}
+                </p>
+              )}
               {employer && <p className="mt-4 text-muted-foreground">{a.summary}</p>}
             </article>
           ))

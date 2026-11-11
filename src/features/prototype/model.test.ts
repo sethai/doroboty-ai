@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { initialState, transition, stateSchema, type State } from "./model";
+const card = {
+  project: "Automatyzacja zgłoszeń",
+  ownWork: "Przeprowadziłam badania i ustaliłam priorytety.",
+  othersWork: "",
+  result: "",
+};
 const time = "2026-11-03T10:00:00.000Z";
 function as(state: State, id: string) {
   return transition(state, { type: "select_person", id });
@@ -14,6 +20,7 @@ function submitted() {
       notes: "Original notes",
       generated: "Generated copy",
       answer: "Approved application with sufficient context.",
+      scopeCard: card,
       consent: true,
     },
     time,
@@ -29,6 +36,7 @@ describe("coherent browser scenario", () => {
       notes: "",
       generated: "",
       answer: "Approved application with sufficient context.",
+      scopeCard: card,
       consent: false,
     };
     expect(() => transition(s, input, time)).toThrow("Zatwierdź");
@@ -137,5 +145,45 @@ describe("coherent browser scenario", () => {
     expect(() =>
       transition(state, { type: "publish", job: { ...updated, salaryMin: 500, salaryMax: 1 } }),
     ).toThrow();
+  });
+  it("requires own contribution, snapshots the scope card and keeps old saves valid", () => {
+    const s = as(initialState(), "candidate-anna");
+    const input = {
+      type: "submit" as const,
+      jobId: s.jobs[0].id,
+      notes: "",
+      generated: "",
+      answer: "Approved application with sufficient context.",
+      consent: true,
+    };
+    expect(() => transition(s, input, time)).toThrow("własny wkład");
+    expect(() => transition(s, { ...input, scopeCard: { ...card, ownWork: "   " } }, time)).toThrow(
+      "własny wkład",
+    );
+    let changed = transition(s, { type: "scope_card", value: card });
+    expect(changed.people.find((p) => p.id === "candidate-anna")?.scopeCard).toEqual(card);
+    changed = transition(changed, { ...input, scopeCard: card }, time, "application-anna");
+    changed = transition(changed, {
+      type: "scope_card",
+      value: { ...card, ownWork: "Inny opis" },
+    });
+    expect(changed.applications.at(-1)?.scopeCard).toEqual(card);
+    expect(() =>
+      transition(as(changed, "employer-brightlabs"), { type: "scope_card", value: card }),
+    ).toThrow();
+    const draft = transition(s, {
+      type: "draft",
+      jobId: s.jobs[1].id,
+      notes: "",
+      generated: "",
+      answer: "Szkic",
+      scopeCard: card,
+    });
+    expect(draft.drafts.at(-1)?.scopeCard).toEqual(card);
+    const legacy = structuredClone(changed);
+    delete legacy.applications.at(-1)!.scopeCard;
+    for (const person of legacy.people) delete person.scopeCard;
+    expect(stateSchema.safeParse(legacy).success).toBe(true);
+    expect(initialState().applications[0].scopeCard?.ownWork).toContain("12 wywiadów");
   });
 });
