@@ -10,7 +10,19 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { JobCard } from "@/features/jobs/job-card";
 import { ApplicationOfferPreview } from "@/features/jobs/application-offer-preview";
 import { usePrototype } from "./store";
-import { currentPerson, publishedJobs, stageLabels, MIN_APPLICATION_ANSWER_LENGTH } from "./model";
+import {
+  currentPerson,
+  emptyScopeCard,
+  publishedJobs,
+  SCOPE_CARD_EMPTY_TEXT,
+  stageLabels,
+  MIN_APPLICATION_ANSWER_LENGTH,
+  type Application,
+  type ScopeCard,
+} from "./model";
+import { ScopeCardEditor, ScopeCardFacts } from "./scope-card";
+import { useVisibleOnce } from "./use-visible-once";
+import { employerSeesScopeCard, hasScopeCard, truncate } from "./experiment";
 import { PageTitle, Empty, NotFound, Notice } from "./shell";
 import { CvAttachment } from "./cv-attachment";
 import { MatchScore } from "./match-score";
@@ -143,6 +155,13 @@ export function ProfilePage({ preview = false }: { preview?: boolean }) {
   const { state, run } = usePrototype();
   const person = currentPerson(state)!;
   const [message, setMessage] = useState("");
+  const [scopeCard, setScopeCard] = useState<ScopeCard>(person.scopeCard ?? emptyScopeCard);
+  const [scopeMessage, setScopeMessage] = useState("");
+  function saveScopeCard(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (run({ type: "scope_card", value: scopeCard }))
+      setScopeMessage("Karta „Mój zakres” została zapisana w profilu.");
+  }
   function save(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const data = new FormData(e.currentTarget);
@@ -178,6 +197,9 @@ export function ProfilePage({ preview = false }: { preview?: boolean }) {
           <h2>{person.headline}</h2>
           <p>{person.location}</p>
           <p>{person.bio}</p>
+          {person.role === "candidate" && (
+            <ScopeCardFacts card={person.scopeCard} id="profile-scope-card" />
+          )}
         </div>
       ) : (
         <form onSubmit={save} className="prototype-panel prototype-form">
@@ -195,6 +217,22 @@ export function ProfilePage({ preview = false }: { preview?: boolean }) {
           </Field>
           <Button type="submit">Zapisz profil</Button>
           {message && <p role="status">{message}</p>}
+        </form>
+      )}
+      {!preview && person.role === "candidate" && (
+        <form
+          onSubmit={saveScopeCard}
+          className="prototype-panel prototype-form profile-scope-card mt-6"
+          aria-labelledby="profile-scope-title"
+        >
+          <h2 id="profile-scope-title">Mój zakres</h2>
+          <p className="scope-card-intro">
+            Opisz raz jeden projekt i swój wkład. Karta wypełni się przy kolejnych aplikacjach, a
+            pracodawca zobaczy ją na górze zgłoszenia dokładnie w tej formie.
+          </p>
+          <ScopeCardEditor value={scopeCard} onChange={setScopeCard} idPrefix="profile-scope" />
+          <Button type="submit">Zapisz kartę</Button>
+          {scopeMessage && <p role="status">{scopeMessage}</p>}
         </form>
       )}
       <section className="prototype-panel mt-6">
@@ -229,9 +267,13 @@ export function SavedPage() {
     </>
   );
 }
+/** Keyed by offer so form state and tracking refs never carry over between offers. */
 export function ApplyPage() {
   const { slug } = useParams();
-  const { state, run } = usePrototype();
+  return <ApplyForm key={slug} slug={slug} />;
+}
+function ApplyForm({ slug }: { slug?: string }) {
+  const { state, run, logEvent } = usePrototype();
   const person = currentPerson(state)!;
   const navigate = useNavigate();
   const job = publishedJobs(state).find((x) => x.slug === slug);
@@ -239,6 +281,14 @@ export function ApplyPage() {
   const notes = draft?.notes ?? "";
   const generated = draft?.generated ?? "";
   const [answer, setAnswer] = useState(draft?.answer ?? "");
+  const [scopeCard, setScopeCard] = useState<ScopeCard>(
+    draft?.scopeCard ?? person.scopeCard ?? emptyScopeCard,
+  );
+  const [skipped, setSkipped] = useState(false);
+  const skipToggle = useRef<HTMLButtonElement>(null);
+  const focusAfterSkip = useRef(false);
+  const started = useRef(false);
+  const reachedScopeCard = useRef(false);
   const [consent, setConsent] = useState(false);
   const [message, setMessage] = useState("");
   const [attempted, setAttempted] = useState(false);
@@ -253,13 +303,55 @@ export function ApplyPage() {
     const timeout = window.setTimeout(() => navigate("/app/aplikacje?wyslano=1"), delay);
     return () => window.clearTimeout(timeout);
   }, [submitted, navigate]);
+  const existing = state.applications.find(
+    (x) => x.jobId === job?.id && x.candidateId === person.id,
+  );
+  const formShown = Boolean(job && (!existing || submitted));
+  const jobId = job?.id;
+  const prefilledFromProfile = Boolean(person.scopeCard && !draft?.scopeCard);
+  const scopeSection = useVisibleOnce<HTMLElement>(
+    () => {
+      reachedScopeCard.current = true;
+      if (jobId)
+        logEvent({
+          event: "scope_card_section_viewed",
+          jobId,
+          attrs: { prefilled_from_profile: prefilledFromProfile },
+        });
+    },
+    { enabled: formShown },
+  );
+  // Leaving a started, unsent form counts as abandoned (in-app navigation or closing the tab).
+  useEffect(() => {
+    if (!jobId || !formShown) return;
+    let logged = false;
+    const abandon = () => {
+      if (logged || !started.current || submittedOnce.current) return;
+      logged = true;
+      logEvent({
+        event: "application_form_abandoned",
+        jobId,
+        attrs: { reached_scope_card_section: reachedScopeCard.current },
+      });
+    };
+    window.addEventListener("pagehide", abandon);
+    return () => {
+      window.removeEventListener("pagehide", abandon);
+      abandon();
+    };
+    // logEvent is recreated per render; it reads the latest state through the store ref.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobId, formShown]);
+  useEffect(() => {
+    if (!focusAfterSkip.current) return;
+    focusAfterSkip.current = false;
+    if (skipped) skipToggle.current?.focus();
+    else document.getElementById("application-scope-project")?.focus();
+  }, [skipped]);
   const answerLength = answer.trim().length;
   const answerInvalid = attempted && answerLength < MIN_APPLICATION_ANSWER_LENGTH;
   const consentInvalid = attempted && !consent;
   if (!job) return <NotFound />;
-  const existing = state.applications.find(
-    (x) => x.jobId === job.id && x.candidateId === person.id,
-  );
   if (existing && !submitted)
     return (
       <section className="prototype-section">
@@ -281,7 +373,17 @@ export function ApplyPage() {
       document.getElementById("application-consent")?.focus();
       return;
     }
-    if (run({ type: "submit", jobId: job!.id, notes, generated, answer, consent })) {
+    if (
+      run({
+        type: "submit",
+        jobId: job!.id,
+        notes,
+        generated,
+        answer,
+        scopeCard: skipped ? undefined : scopeCard,
+        consent,
+      })
+    ) {
       submittedOnce.current = true;
       setSubmitted(true);
       if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
@@ -323,6 +425,87 @@ export function ApplyPage() {
             />
           </section>
           <section
+            ref={scopeSection}
+            className="application-form-section application-scope"
+            aria-labelledby="application-scope-title"
+          >
+            <h3 id="application-scope-title">Mój zakres</h3>
+            {skipped ? (
+              <>
+                <p className="application-help">
+                  Pominięto kartę. Aplikacja zostanie wysłana bez karty „Mój zakres”.
+                </p>
+                <div className="scope-card-actions">
+                  <Button
+                    ref={skipToggle}
+                    type="button"
+                    variant="outline"
+                    disabled={submitted}
+                    onClick={() => {
+                      focusAfterSkip.current = true;
+                      setSkipped(false);
+                      setConsent(false);
+                    }}
+                  >
+                    Wypełnij kartę
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="application-help">
+                  Opisz jeden projekt i swój wkład. Pracodawca zobaczy tę kartę na górze zgłoszenia,
+                  przed Twoją odpowiedzią — dokładnie w tej formie, bez przepisywania. Wszystkie
+                  pola są opcjonalne.
+                </p>
+                {prefilledFromProfile && (
+                  <p className="application-help">
+                    Karta została wypełniona z Twojego profilu. Zmiany tutaj dotyczą tylko tej
+                    aplikacji, dopóki nie zapiszesz ich w profilu.
+                  </p>
+                )}
+                <ScopeCardEditor
+                  value={scopeCard}
+                  onChange={(value) => {
+                    started.current = true;
+                    setScopeCard(value);
+                    setConsent(false);
+                  }}
+                  idPrefix="application-scope"
+                  disabled={submitted}
+                />
+                <div className="scope-card-actions">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={submitted}
+                    onClick={() => {
+                      if (run({ type: "scope_card", value: scopeCard }))
+                        setMessage("Karta „Mój zakres” została zapisana w profilu.");
+                    }}
+                  >
+                    Zapisz kartę w profilu
+                  </Button>
+                  <Button
+                    ref={skipToggle}
+                    type="button"
+                    variant="ghost"
+                    disabled={submitted}
+                    onClick={() => {
+                      started.current = true;
+                      focusAfterSkip.current = true;
+                      logEvent({ event: "scope_card_skipped", jobId: job.id });
+                      setSkipped(true);
+                      setConsent(false);
+                    }}
+                  >
+                    Pomiń kartę
+                  </Button>
+                </div>
+              </>
+            )}
+          </section>
+          <section
             className="application-form-section application-answer"
             aria-label="Odpowiedź do aplikacji"
           >
@@ -337,6 +520,7 @@ export function ApplyPage() {
                 aria-describedby="application-answer-help"
                 value={answer}
                 onChange={(e) => {
+                  started.current = true;
                   setAnswer(e.target.value);
                   setConsent(false);
                 }}
@@ -387,7 +571,7 @@ export function ApplyPage() {
                 disabled={submitted}
                 variant="outline"
                 onClick={() => {
-                  if (run({ type: "draft", jobId: job.id, notes, generated, answer }))
+                  if (run({ type: "draft", jobId: job.id, notes, generated, answer, scopeCard }))
                     setMessage("Szkic został zapisany.");
                 }}
               >
@@ -410,11 +594,51 @@ export function ApplyPage() {
     </section>
   );
 }
+function ScopeCardLines({ application }: { application: Application }) {
+  const { logEvent } = usePrototype();
+  const ref = useVisibleOnce<HTMLDivElement>(
+    () =>
+      logEvent({
+        event: "employer_scope_card_impression",
+        applicationId: application.id,
+        attrs: { place: "list" },
+      }),
+    { minMs: 1000 },
+  );
+  const card = application.scopeCard;
+  return (
+    <div ref={ref} className="application-scope-lines">
+      <p>
+        <strong>Mój własny wkład:</strong> {card?.ownWork.trim() || SCOPE_CARD_EMPTY_TEXT}
+      </p>
+      <p>
+        <strong>Wkład innych osób:</strong>{" "}
+        {card?.othersWork.trim() ? truncate(card.othersWork) : SCOPE_CARD_EMPTY_TEXT}
+      </p>
+    </div>
+  );
+}
 export function ApplicationsPage({ employer = false }: { employer?: boolean }) {
-  const { state } = usePrototype();
+  const { state, logEvent } = usePrototype();
   const person = currentPerson(state)!;
   const [query, setQuery] = useState("");
   const [params] = useSearchParams();
+  const listLogged = useRef(false);
+  useEffect(() => {
+    if (!employer || listLogged.current) return;
+    listLogged.current = true;
+    const companyApplications = state.applications.filter((x) => x.companyId === person.companyId);
+    for (const jobId of new Set(companyApplications.map((x) => x.jobId))) {
+      const forJob = companyApplications.filter((x) => x.jobId === jobId);
+      logEvent({
+        event: "employer_candidate_list_viewed",
+        jobId,
+        attrs: { n_applications: forJob.length, n_with_card: forJob.filter(hasScopeCard).length },
+      });
+    }
+    // Logged once per visit of the list, one event per job present.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const applications = state.applications.filter(
     (x) =>
       (employer ? x.companyId === person.companyId : x.candidateId === person.id) &&
@@ -454,6 +678,9 @@ export function ApplicationsPage({ employer = false }: { employer?: boolean }) {
                 </div>
                 <MatchScore score={a.score} />
               </div>
+              {employer && employerSeesScopeCard(state, a.jobId) && (
+                <ScopeCardLines application={a} />
+              )}
               {employer && <p className="mt-4 text-muted-foreground">{a.summary}</p>}
             </article>
           ))

@@ -4,6 +4,8 @@ import { ProcessTimeline } from "@/components/process-timeline";
 import { RecordSheet } from "@/components/record-sheet";
 import { CvAttachment } from "./cv-attachment";
 import { MatchScore } from "./match-score";
+import { ScopeCardFacts } from "./scope-card";
+import { useVisibleOnce } from "./use-visible-once";
 import { stageLabels, type Application, type Stage } from "./model";
 
 type RecordEvent = { stage: Stage; at: string; note?: string };
@@ -21,10 +23,21 @@ export function ApplicationRecord({
   statusRef,
   children,
   footer,
+  showScopeCard = true,
+  onScopeCardVisible,
+  onTabChange,
 }: {
   application: Pick<
     Application,
-    "candidateId" | "candidateName" | "jobTitle" | "stage" | "answer" | "cv" | "score" | "summary"
+    | "candidateId"
+    | "candidateName"
+    | "jobTitle"
+    | "stage"
+    | "answer"
+    | "cv"
+    | "score"
+    | "summary"
+    | "scopeCard"
   >;
   companyName: string;
   audience: "candidate" | "employer";
@@ -32,6 +45,11 @@ export function ApplicationRecord({
   statusRef?: Ref<HTMLSpanElement>;
   children?: ReactNode;
   footer?: ReactNode;
+  /** False hides the card entirely (employer view outside the scope_card experiment arm). */
+  showScopeCard?: boolean;
+  /** Called once after the card has been in view for at least one second. */
+  onScopeCardVisible?: () => void;
+  onTabChange?: (tab: string) => void;
 }) {
   const candidate = audience === "candidate";
   const title = candidate ? application.jobTitle : application.candidateName;
@@ -67,6 +85,12 @@ export function ApplicationRecord({
       <div className="recruiting-layout">
         <RecordSheet
           label={candidate ? "Twoja wysłana aplikacja" : "Materiały kandydata"}
+          lead={
+            showScopeCard ? (
+              <VisibleScopeCard card={application.scopeCard} onVisible={onScopeCardVisible} />
+            ) : undefined
+          }
+          onValueChange={onTabChange}
           sections={[
             {
               value: "answer",
@@ -117,5 +141,23 @@ export function ApplicationRecord({
         </aside>
       </div>
     </article>
+  );
+}
+
+function VisibleScopeCard({
+  card,
+  onVisible,
+}: {
+  card: Application["scopeCard"];
+  onVisible?: () => void;
+}) {
+  const ref = useVisibleOnce<HTMLDivElement>(() => onVisible?.(), {
+    enabled: Boolean(onVisible),
+    minMs: 1000,
+  });
+  return (
+    <div ref={ref}>
+      <ScopeCardFacts card={card} id="record-scope-card" />
+    </div>
   );
 }

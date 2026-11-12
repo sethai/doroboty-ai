@@ -2,6 +2,14 @@ import { z } from "zod";
 import marketplace from "./data/marketplace.json" with { type: "json" };
 import people from "./data/people.json" with { type: "json" };
 import type { JobWithCompany } from "@/features/jobs/types";
+import {
+  assignScopeCardVariant,
+  buildExperimentEvent,
+  scopeCardVariants,
+  type ExperimentEvent,
+  type ExperimentEventAttributes,
+  type ExperimentEventName,
+} from "./experiment";
 
 const id = z
   .string()
@@ -53,12 +61,47 @@ export const jobSchema = z
     verificationStatus: z.enum(["unverified", "editorial", "employer_verified"]),
     sourceBrief: text.optional(),
     generatedDescription: text.optional(),
+    scopeCardVariant: z.enum(scopeCardVariants).optional(),
+    scopeCardAssignedAt: z.iso.datetime().optional(),
   })
   .refine(
     (job) =>
       job.salaryMin === undefined || job.salaryMax === undefined || job.salaryMin <= job.salaryMax,
     { path: ["salaryMax"], message: "Salary maximum must not be below minimum" },
   );
+const scopeText = z.string().trim().max(1000);
+/** Candidate-authored scope card ("Mój zakres"); reaches the employer exactly as typed. */
+export const scopeCardSchema = z.object({
+  project: scopeText,
+  ownWork: scopeText,
+  othersWork: scopeText,
+  result: scopeText,
+});
+export type ScopeCard = z.infer<typeof scopeCardSchema>;
+export const scopeCardFields = [
+  {
+    key: "project",
+    label: "Projekt i kontekst",
+    hint: "Czego dotyczył projekt, dla kogo i w jakim zespole.",
+  },
+  {
+    key: "ownWork",
+    label: "Mój własny wkład",
+    hint: "Co zrobiłeś(-aś) samodzielnie: decyzje, analizy, kod, rozmowy.",
+  },
+  {
+    key: "othersWork",
+    label: "Wkład innych osób",
+    hint: "Co robili inni i czego nie robiłeś(-aś) sam(a).",
+  },
+  {
+    key: "result",
+    label: "Rezultat i czego nie mogę pokazać",
+    hint: "Wynik, liczby lub szczegóły oraz materiały, których nie możesz udostępnić.",
+  },
+] as const satisfies readonly { key: keyof ScopeCard; label: string; hint: string }[];
+export const SCOPE_CARD_EMPTY_TEXT = "brak informacji w zgłoszeniu";
+export const emptyScopeCard: ScopeCard = { project: "", ownWork: "", othersWork: "", result: "" };
 export const profileSchema = z.object({
   name: shortText,
   headline: shortText,
@@ -72,6 +115,7 @@ const personSchema = profileSchema.extend({
   cv: text,
   exampleScore: z.number().int().min(0).max(100),
   exampleSummary: text,
+  scopeCard: scopeCardSchema.optional(),
 });
 export const stages = [
   "submitted",
@@ -115,8 +159,11 @@ const applicationSchema = z.object({
   answer: text.min(MIN_APPLICATION_ANSWER_LENGTH),
   sourceNotes: text,
   generatedAnswer: text,
+  scopeCard: scopeCardSchema.optional(),
   score: z.number().int().min(0).max(100),
   summary: text,
+  /** Where the employer summary text comes from; never the scope card. */
+  summarySource: z.enum(["scenario_fixture"]).optional(),
   stage: z.enum(stages),
   events: z
     .array(z.object({ stage: z.enum(stages), at: z.iso.datetime(), note: text }))
@@ -129,6 +176,7 @@ const draftSchema = z.object({
   notes: text,
   generated: text,
   answer: text,
+  scopeCard: scopeCardSchema.optional(),
 });
 export const stateSchema = z
   .object({
@@ -140,6 +188,7 @@ export const stateSchema = z
     applications: z.array(applicationSchema).max(2000),
     saved: z.array(z.object({ candidateId: id, jobId: id })).max(5000),
     drafts: z.array(draftSchema).max(1000),
+    experiment: z.object({ e1Enabled: z.boolean() }).optional(),
   })
   .superRefine((s, ctx) => {
     const problem = (message: string) => ctx.addIssue({ code: "custom", message });
@@ -201,18 +250,28 @@ export type Action =
   | { type: "select_person"; id: string | null }
   | { type: "profile"; value: z.infer<typeof profileSchema> }
   | { type: "toggle_saved"; jobId: string }
-  | { type: "draft"; jobId: string; notes: string; generated: string; answer: string }
+  | { type: "scope_card"; value: ScopeCard }
+  | {
+      type: "draft";
+      jobId: string;
+      notes: string;
+      generated: string;
+      answer: string;
+      scopeCard?: ScopeCard;
+    }
   | {
       type: "submit";
       jobId: string;
       notes: string;
       generated: string;
       answer: string;
+      scopeCard?: ScopeCard;
       consent: boolean;
     }
   | { type: "stage"; applicationId: string; stage: Stage; note: string }
   | { type: "withdraw"; applicationId: string }
   | { type: "publish"; job: z.infer<typeof jobSchema> }
+  | { type: "experiment_flag"; enabled: boolean }
   | { type: "company"; name: string; description: string };
 
 export function initialState(): State {
@@ -239,8 +298,10 @@ export function initialState(): State {
       "Pracowałem nad automatyzacją obsługi zgłoszeń. Poprowadziłem badania z użytkownikami i wdrożenie, które skróciło czas odpowiedzi o 25%. Chętnie opowiem o decyzjach i ograniczeniach tego projektu.",
     sourceNotes: "",
     generatedAnswer: "",
+    scopeCard: bob.scopeCard,
     score: bob.exampleScore,
     summary: bob.exampleSummary,
+    summarySource: "scenario_fixture",
     stage: "submitted",
     events: [{ stage: "submitted", at: "2026-11-02T09:00:00.000Z", note: "" }],
   });
@@ -260,12 +321,21 @@ export function transition(
   action: Action,
   now = new Date().toISOString(),
   newId: string = crypto.randomUUID(),
+  /** Receives the E1 domain events of a successful transition; the caller stores them. */
+  emitted: ExperimentEvent[] = [],
 ): State {
   const s = structuredClone(state);
   const person = currentPerson(s);
   const fail = (message: string): never => {
     throw new Error(message);
   };
+  const pending: ExperimentEvent[] = [];
+  const logEvent = (
+    event: ExperimentEventName,
+    jobId: string,
+    attrs: ExperimentEventAttributes = {},
+    applicationId?: string,
+  ) => pending.push(buildExperimentEvent(s, { event, jobId, applicationId, attrs }, now));
   const candidate = () => {
     if (person?.role !== "candidate") return fail("Wybierz profil kandydata.");
     return person;
@@ -280,6 +350,8 @@ export function transition(
     s.activePersonId = action.id;
   } else if (action.type === "profile")
     Object.assign(candidate(), profileSchema.parse(action.value));
+  else if (action.type === "scope_card")
+    candidate().scopeCard = scopeCardSchema.parse(action.value);
   else if (action.type === "toggle_saved") {
     const p = candidate();
     if (!s.jobs.some((x) => x.id === action.jobId)) fail("Nie znaleziono oferty.");
@@ -296,6 +368,9 @@ export function transition(
     const job = s.jobs.find((x) => x.id === action.jobId && x.publicationStatus === "published");
     if (!job) return fail("Oferta nie jest dostępna.");
     if (!action.consent) fail("Zatwierdź treść i zgodę na przesłanie aplikacji.");
+    const parsedCard = action.scopeCard ? scopeCardSchema.parse(action.scopeCard) : undefined;
+    const scopeCard =
+      parsedCard && Object.values(parsedCard).some(Boolean) ? parsedCard : undefined;
     if (s.applications.some((x) => x.candidateId === p.id && x.jobId === job.id))
       fail("Aplikacja na tę ofertę została już wysłana.");
     s.applications.push(
@@ -310,13 +385,34 @@ export function transition(
         answer: action.answer,
         sourceNotes: action.notes,
         generatedAnswer: action.generated,
+        scopeCard,
         score: p.exampleScore,
         summary: p.exampleSummary,
+        summarySource: "scenario_fixture",
         stage: "submitted",
         events: [{ stage: "submitted", at: now, note: "" }],
       }),
     );
     s.drafts = s.drafts.filter((x) => !(x.candidateId === p.id && x.jobId === job.id));
+    const profileCard = p.scopeCard;
+    logEvent(
+      "application_submitted",
+      job.id,
+      {
+        has_card: Boolean(scopeCard?.ownWork),
+        card_fields_filled: scopeCard ? Object.values(scopeCard).filter(Boolean).length : 0,
+        card_own_contribution_chars: scopeCard?.ownWork.length ?? 0,
+        card_saved_to_profile: Boolean(
+          scopeCard &&
+          profileCard &&
+          (Object.keys(scopeCard) as (keyof typeof scopeCard)[]).every(
+            (key) => scopeCard[key] === profileCard[key].trim(),
+          ),
+        ),
+        writing_assistant_used: false,
+      },
+      newId,
+    );
   } else if (action.type === "stage" || action.type === "withdraw") {
     const application = s.applications.find((x) => x.id === action.applicationId);
     if (!application) return fail("Nie znaleziono aplikacji.");
@@ -333,17 +429,57 @@ export function transition(
       if (application.companyId !== p.companyId || !nextStages[application.stage].includes(stage))
         fail("Ta zmiana etapu nie jest dostępna.");
     }
+    const previous = application.stage;
     application.stage = stage;
     application.events.push({ stage, at: now, note: action.type === "stage" ? action.note : "" });
+    const common = { has_card: Boolean(application.scopeCard?.ownWork) };
+    if (
+      (previous === "submitted" || previous === "reviewed") &&
+      (stage === "reviewed" || stage === "interview_invited" || stage === "rejected")
+    ) {
+      const decision =
+        stage === "reviewed" ? "hold" : stage === "interview_invited" ? "invite" : "reject";
+      logEvent(
+        "employer_screening_decision",
+        application.jobId,
+        { ...common, decision, match_score: application.score },
+        application.id,
+      );
+      if (stage === "interview_invited")
+        logEvent("interview_scheduled", application.jobId, { interview_at: now }, application.id);
+    }
+    if (previous === "first_conversation_held" && (stage === "continued" || stage === "rejected"))
+      logEvent(
+        "post_interview_decision_recorded",
+        application.jobId,
+        { ...common, decision: stage === "continued" ? "continue" : "reject" },
+        application.id,
+      );
   } else if (action.type === "publish") {
     const p = employer();
     const job = jobSchema.parse(action.job);
     if (job.companyId !== p.companyId) fail("Wybierz ofertę własnej firmy.");
     const index = s.jobs.findIndex((x) => x.id === job.id);
     if (index >= 0) {
-      if (s.jobs[index].companyId !== p.companyId) fail("Nie można zmienić tej oferty.");
-      s.jobs[index] = job;
-    } else s.jobs.unshift(job);
+      const stored = s.jobs[index];
+      if (stored.companyId !== p.companyId) fail("Nie można zmienić tej oferty.");
+      // The experiment arm is fixed at first publication and survives edits.
+      s.jobs[index] = {
+        ...job,
+        scopeCardVariant: stored.scopeCardVariant,
+        scopeCardAssignedAt: stored.scopeCardAssignedAt,
+      };
+    } else {
+      const enabled = Boolean(s.experiment?.e1Enabled);
+      s.jobs.unshift({
+        ...job,
+        scopeCardVariant: enabled ? assignScopeCardVariant(job.id) : "none",
+        scopeCardAssignedAt: enabled ? now : undefined,
+      });
+    }
+  } else if (action.type === "experiment_flag") {
+    if (person?.role !== "operator") fail("Wybierz profil prowadzącego.");
+    s.experiment = { e1Enabled: action.enabled };
   } else if (action.type === "company") {
     const p = employer();
     Object.assign(
@@ -351,5 +487,7 @@ export function transition(
       { name: shortText.parse(action.name), description: text.parse(action.description) },
     );
   }
-  return stateSchema.parse(s);
+  const next = stateSchema.parse(s);
+  emitted.push(...pending);
+  return next;
 }

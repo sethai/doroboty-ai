@@ -19,7 +19,13 @@
     "location": "Kraków",
     "cv": "Marek Nowak — Product Owner\n2021–2026: rozwój platformy B2B. Automatyzacja obsługi zgłoszeń i skrócenie czasu odpowiedzi o 25%. Prowadzenie warsztatów z użytkownikami, praca z backlogiem i zespołem wdrożeniowym.",
     "exampleScore": 72,
-    "exampleSummary": "Doświadczenie w produktach B2B i automatyzacji obsługi. Podczas rozmowy warto doprecyzować zakres samodzielnych decyzji."
+    "exampleSummary": "Doświadczenie w produktach B2B i automatyzacji obsługi. Podczas rozmowy warto doprecyzować zakres samodzielnych decyzji.",
+    "scopeCard": {
+      "project": "Automatyzacja obsługi zgłoszeń klientów w platformie B2B. Zespół produktowy: 6 osób, 2 kwartały.",
+      "ownWork": "Przeprowadziłem 12 wywiadów z użytkownikami, ustaliłem priorytety backlogu i koordynowałem wdrożenie u pierwszych trzech klientów.",
+      "othersWork": "Reguły automatyzacji i integrację z systemem zgłoszeń zbudowali inżynierowie. Budżet i termin zatwierdzał kierownik produktu.",
+      "result": "Czas pierwszej odpowiedzi skrócił się o 25%. Nie mogę pokazać danych klientów ani wewnętrznych raportów."
+    }
   },
   {
     "id": "employer-brightlabs",
