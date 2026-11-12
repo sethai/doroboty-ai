@@ -8,3 +8,5 @@ artifacts/
 *.tsbuildinfo
 .env*
 npm-debug.log*
+.netlify/
+!.env.example

@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { initialState, transition, type Action, type State } from "./model";
+import posthog from "posthog-js";
+import { currentPerson, initialState, transition, type Action, type State } from "./model";
 import { parseState, readState, saveState, type StoragePort } from "./storage";
 import { appendEvents, clearEvents, readEvents } from "./event-log";
 import {
@@ -21,6 +22,7 @@ function useStore() {
   const [error, setError] = useState("");
   const [blocked, setBlocked] = useState(loaded.blocked);
   const latest = useRef(state);
+  const previousPersonId = useRef<string | null | undefined>(undefined);
   const [eventLog, setEventLog] = useState(() => readEvents(browserStorage()));
   const latestLog = useRef(eventLog);
   function record(added: readonly ExperimentEvent[]) {
@@ -76,6 +78,29 @@ function useStore() {
       return false;
     }
   }
+  useEffect(() => {
+    const person = currentPerson(state);
+    const previousId = previousPersonId.current;
+
+    if (previousId === state.activePersonId) return;
+
+    if (
+      import.meta.env.VITE_PUBLIC_POSTHOG_PROJECT_TOKEN &&
+      import.meta.env.VITE_PUBLIC_POSTHOG_HOST
+    ) {
+      if (previousId && previousId !== state.activePersonId) posthog.reset();
+
+      if (person) {
+        posthog.identify(person.id, {
+          name: person.name,
+          role: person.role,
+        });
+      }
+    }
+
+    previousPersonId.current = state.activePersonId;
+  }, [state]);
+
   useEffect(() => {
     document.documentElement.classList.remove("dark");
   }, []);

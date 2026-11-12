@@ -5,6 +5,7 @@ import { ApplicationRecord } from "./application-record";
 import { employerSeesScopeCard, hasScopeCard } from "./experiment";
 import { nextStages, stageLabels, type Application } from "./model";
 import { usePrototype } from "./store";
+import { captureEvent } from "./analytics";
 
 export function RecruitingApplication({ application }: { application: Application }) {
   const { state, run, logEvent } = usePrototype();
@@ -65,6 +66,12 @@ export function RecruitingApplication({ application }: { application: Applicatio
                     variant={stage === "rejected" ? "outline" : "default"}
                     onClick={() => {
                       if (run({ type: "stage", applicationId: application.id, stage, note })) {
+                        captureEvent("application_stage_changed", {
+                          job_id: application.jobId,
+                          from_stage: application.stage,
+                          to_stage: stage,
+                          has_note: Boolean(note.trim()),
+                        });
                         setNote("");
                         setAnnouncement(`Zapisano etap: ${stageLabels[stage]}.`);
                         pendingFocus.current = true;

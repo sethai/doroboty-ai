@@ -16,6 +16,7 @@ import { currentPerson, jobSchema } from "./model";
 import { usePrototype } from "./store";
 import { Field } from "./workspace";
 import { Empty, NotFound, PageTitle } from "./shell";
+import { captureEvent } from "./analytics";
 
 export function EmployerJobs() {
   const { state } = usePrototype();
@@ -133,7 +134,16 @@ export function EmployerJobEditor() {
       );
       return;
     }
-    if (run({ type: "publish", job: parsed.data })) navigate("/app/oferty");
+    if (run({ type: "publish", job: parsed.data })) {
+      captureEvent("job_published", {
+        job_id: parsed.data.id,
+        job_category: parsed.data.category,
+        job_function: parsed.data.function,
+        remote_status: parsed.data.remoteStatus,
+        is_new: !existing,
+      });
+      navigate("/app/oferty");
+    }
   }
   return (
     <>
@@ -286,8 +296,10 @@ export function CompanyEditor() {
         name: String(data.get("name")),
         description: String(data.get("description")),
       })
-    )
+    ) {
+      captureEvent("company_profile_saved", { company_id: company.id });
       setMessage("Dane firmy zostały zapisane.");
+    }
   }
   return (
     <>
