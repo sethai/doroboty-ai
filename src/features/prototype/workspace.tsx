@@ -28,6 +28,7 @@ import { CvAttachment } from "./cv-attachment";
 import { MatchScore } from "./match-score";
 import { RecruitingApplication } from "./recruiting-application";
 import { CandidateApplication } from "./candidate-application";
+import { captureEvent } from "./analytics";
 
 export function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -159,8 +160,10 @@ export function ProfilePage({ preview = false }: { preview?: boolean }) {
   const [scopeMessage, setScopeMessage] = useState("");
   function saveScopeCard(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (run({ type: "scope_card", value: scopeCard }))
+    if (run({ type: "scope_card", value: scopeCard })) {
+      captureEvent("scope_card_saved", { source: "profile" });
       setScopeMessage("Karta „Mój zakres” została zapisana w profilu.");
+    }
   }
   function save(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -175,8 +178,10 @@ export function ProfilePage({ preview = false }: { preview?: boolean }) {
           location: String(data.get("location")),
         },
       })
-    )
+    ) {
+      captureEvent("profile_saved");
       setMessage("Profil został zapisany.");
+    }
   }
   return (
     <>
@@ -384,6 +389,11 @@ function ApplyForm({ slug }: { slug?: string }) {
         consent,
       })
     ) {
+      captureEvent("application_submitted", {
+        job_id: job!.id,
+        job_category: job!.category,
+        included_scope_card: !skipped,
+      });
       submittedOnce.current = true;
       setSubmitted(true);
       if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
@@ -480,8 +490,10 @@ function ApplyForm({ slug }: { slug?: string }) {
                     variant="outline"
                     disabled={submitted}
                     onClick={() => {
-                      if (run({ type: "scope_card", value: scopeCard }))
+                      if (run({ type: "scope_card", value: scopeCard })) {
+                        captureEvent("scope_card_saved", { source: "application" });
                         setMessage("Karta „Mój zakres” została zapisana w profilu.");
+                      }
                     }}
                   >
                     Zapisz kartę w profilu
@@ -571,8 +583,13 @@ function ApplyForm({ slug }: { slug?: string }) {
                 disabled={submitted}
                 variant="outline"
                 onClick={() => {
-                  if (run({ type: "draft", jobId: job.id, notes, generated, answer, scopeCard }))
+                  if (run({ type: "draft", jobId: job.id, notes, generated, answer, scopeCard })) {
+                    captureEvent("application_draft_saved", {
+                      job_id: job.id,
+                      job_category: job.category,
+                    });
                     setMessage("Szkic został zapisany.");
+                  }
                 }}
               >
                 Zapisz szkic
