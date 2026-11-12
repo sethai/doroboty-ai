@@ -78,11 +78,10 @@ export function CasePage() {
 }
 
 function ExperimentPanel() {
-  const { state, run } = usePrototype();
+  const { state, run, events } = usePrototype();
   const flagId = useId();
   const enabled = Boolean(state.experiment?.e1Enabled);
-  const rows = publicationMetrics(state);
-  const events = state.events ?? [];
+  const rows = publicationMetrics(state, events);
   return (
     <section
       className="prototype-panel prototype-form experiment-panel mt-6"

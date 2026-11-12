@@ -43,7 +43,37 @@ export const experimentEventSchema = z.object({
 });
 export type ExperimentEvent = z.infer<typeof experimentEventSchema>;
 export type ExperimentEventAttributes = ExperimentEvent["attrs"];
+/** Events live in their own browser log (event-log.ts), never in the scenario state. */
 export const MAX_EXPERIMENT_EVENTS = 5000;
+export type ExperimentEventInput = {
+  event: ExperimentEventName;
+  jobId?: string;
+  applicationId?: string;
+  attrs?: ExperimentEventAttributes;
+};
+
+/** Resolves the job (directly or through the application) and the acting persona. */
+export function buildExperimentEvent(
+  state: State,
+  input: ExperimentEventInput,
+  now: string,
+): ExperimentEvent {
+  const application = input.applicationId
+    ? state.applications.find((x) => x.id === input.applicationId)
+    : undefined;
+  if (input.applicationId && !application) throw new Error("Nie znaleziono aplikacji.");
+  const job = state.jobs.find((x) => x.id === (application?.jobId ?? input.jobId));
+  if (!job) throw new Error("Nie znaleziono oferty.");
+  return experimentEventSchema.parse({
+    event: input.event,
+    ts: now,
+    publicationId: job.id,
+    variant: jobVariant(job),
+    applicationId: application?.id,
+    actorId: state.activePersonId ?? undefined,
+    attrs: input.attrs ?? {},
+  });
+}
 
 /** Deterministic 50/50 assignment from the job id (32-bit FNV-1a). */
 export function assignScopeCardVariant(jobId: string): Exclude<ScopeCardVariant, "none"> {
@@ -111,7 +141,10 @@ export type PublicationMetrics = {
 };
 
 /** One row per job, computed from submitted applications, stage histories and form events. */
-export function publicationMetrics(state: State): PublicationMetrics[] {
+export function publicationMetrics(
+  state: State,
+  events: readonly ExperimentEvent[],
+): PublicationMetrics[] {
   return state.jobs.map((job) => {
     const applications = state.applications.filter((x) => x.jobId === job.id);
     const outcomes = applications.map((application) => ({
@@ -151,7 +184,7 @@ export function publicationMetrics(state: State): PublicationMetrics[] {
         interviewedWithCard.filter((x) => x.continued).length,
         interviewedWithCard.length,
       ),
-      nAbandonedForms: (state.events ?? []).filter(
+      nAbandonedForms: events.filter(
         (event) => event.event === "application_form_abandoned" && event.publicationId === job.id,
       ).length,
     };
@@ -179,7 +212,12 @@ const csvColumns: [keyof PublicationMetrics, string][] = [
   ["nAbandonedForms", "n_abandoned_forms"],
 ];
 export function metricsCsv(rows: PublicationMetrics[]) {
-  const cell = (value: unknown) => `"${String(value ?? "").replaceAll('"', '""')}"`;
+  const cell = (value: unknown) => {
+    const text = String(value ?? "");
+    // Prefix text that a spreadsheet would run as a formula.
+    const safe = /^[=+\-@\t\r]/.test(text) && !/^-?\d/.test(text) ? `'${text}` : text;
+    return `"${safe.replaceAll('"', '""')}"`;
+  };
   return [
     csvColumns.map(([, header]) => header).join(","),
     ...rows.map((row) => csvColumns.map(([key]) => cell(row[key])).join(",")),

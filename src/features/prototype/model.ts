@@ -4,10 +4,9 @@ import people from "./data/people.json" with { type: "json" };
 import type { JobWithCompany } from "@/features/jobs/types";
 import {
   assignScopeCardVariant,
-  experimentEventSchema,
-  jobVariant,
-  MAX_EXPERIMENT_EVENTS,
+  buildExperimentEvent,
   scopeCardVariants,
+  type ExperimentEvent,
   type ExperimentEventAttributes,
   type ExperimentEventName,
 } from "./experiment";
@@ -190,7 +189,6 @@ export const stateSchema = z
     saved: z.array(z.object({ candidateId: id, jobId: id })).max(5000),
     drafts: z.array(draftSchema).max(1000),
     experiment: z.object({ e1Enabled: z.boolean() }).optional(),
-    events: z.array(experimentEventSchema).max(MAX_EXPERIMENT_EVENTS).optional(),
   })
   .superRefine((s, ctx) => {
     const problem = (message: string) => ctx.addIssue({ code: "custom", message });
@@ -274,13 +272,6 @@ export type Action =
   | { type: "withdraw"; applicationId: string }
   | { type: "publish"; job: z.infer<typeof jobSchema> }
   | { type: "experiment_flag"; enabled: boolean }
-  | {
-      type: "log_event";
-      event: ExperimentEventName;
-      jobId?: string;
-      applicationId?: string;
-      attrs?: ExperimentEventAttributes;
-    }
   | { type: "company"; name: string; description: string };
 
 export function initialState(): State {
@@ -330,33 +321,21 @@ export function transition(
   action: Action,
   now = new Date().toISOString(),
   newId: string = crypto.randomUUID(),
+  /** Receives the E1 domain events of a successful transition; the caller stores them. */
+  emitted: ExperimentEvent[] = [],
 ): State {
   const s = structuredClone(state);
   const person = currentPerson(s);
   const fail = (message: string): never => {
     throw new Error(message);
   };
+  const pending: ExperimentEvent[] = [];
   const logEvent = (
     event: ExperimentEventName,
     jobId: string,
     attrs: ExperimentEventAttributes = {},
     applicationId?: string,
-  ) => {
-    const job = s.jobs.find((x) => x.id === jobId);
-    if (!job) return fail("Nie znaleziono oferty.");
-    s.events = [
-      ...(s.events ?? []),
-      experimentEventSchema.parse({
-        event,
-        ts: now,
-        publicationId: job.id,
-        variant: jobVariant(job),
-        applicationId,
-        actorId: person?.id,
-        attrs,
-      }),
-    ].slice(-MAX_EXPERIMENT_EVENTS);
-  };
+  ) => pending.push(buildExperimentEvent(s, { event, jobId, applicationId, attrs }, now));
   const candidate = () => {
     if (person?.role !== "candidate") return fail("Wybierz profil kandydata.");
     return person;
@@ -501,12 +480,6 @@ export function transition(
   } else if (action.type === "experiment_flag") {
     if (person?.role !== "operator") fail("Wybierz profil prowadzącego.");
     s.experiment = { e1Enabled: action.enabled };
-  } else if (action.type === "log_event") {
-    const application = action.applicationId
-      ? s.applications.find((x) => x.id === action.applicationId)
-      : undefined;
-    if (action.applicationId && !application) fail("Nie znaleziono aplikacji.");
-    logEvent(action.event, application?.jobId ?? action.jobId ?? "", action.attrs, application?.id);
   } else if (action.type === "company") {
     const p = employer();
     Object.assign(
@@ -514,5 +487,7 @@ export function transition(
       { name: shortText.parse(action.name), description: text.parse(action.description) },
     );
   }
-  return stateSchema.parse(s);
+  const next = stateSchema.parse(s);
+  emitted.push(...pending);
+  return next;
 }

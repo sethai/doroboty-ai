@@ -6,6 +6,8 @@ Let a candidate describe their own contribution in four short fields that reach 
 
 Problem being addressed (O1): from the application alone a recruiter cannot tell what the candidate did personally; this usually surfaces only in the interview. This prototype change demonstrates the mechanism for a test with a real person; it is not evidence that it improves hiring decisions.
 
+> **Superseded in part (2026-11-11):** the E1 change (`e1-scope-card-experiment.md`) made every card field optional, added „Pomiń kartę” and shows the card to employers only in the `scope_card` arm. Decision 2 and the "Required on submit" column below describe the first version only.
+
 ## Decisions (accepted 2026-11-11)
 
 1. No writing-assistant simulation. The prototype has no assistant (CAN-12), so the fields reach the employer exactly as typed; the form says so.

@@ -17,12 +17,12 @@ import {
   SCOPE_CARD_EMPTY_TEXT,
   stageLabels,
   MIN_APPLICATION_ANSWER_LENGTH,
+  type Application,
   type ScopeCard,
 } from "./model";
 import { ScopeCardEditor, ScopeCardFacts } from "./scope-card";
 import { useVisibleOnce } from "./use-visible-once";
 import { employerSeesScopeCard, hasScopeCard, truncate } from "./experiment";
-import type { Application } from "./model";
 import { PageTitle, Empty, NotFound, Notice } from "./shell";
 import { CvAttachment } from "./cv-attachment";
 import { MatchScore } from "./match-score";
@@ -267,9 +267,13 @@ export function SavedPage() {
     </>
   );
 }
+/** Keyed by offer so form state and tracking refs never carry over between offers. */
 export function ApplyPage() {
   const { slug } = useParams();
-  const { state, run } = usePrototype();
+  return <ApplyForm key={slug} slug={slug} />;
+}
+function ApplyForm({ slug }: { slug?: string }) {
+  const { state, run, logEvent } = usePrototype();
   const person = currentPerson(state)!;
   const navigate = useNavigate();
   const job = publishedJobs(state).find((x) => x.slug === slug);
@@ -309,8 +313,7 @@ export function ApplyPage() {
     () => {
       reachedScopeCard.current = true;
       if (jobId)
-        run({
-          type: "log_event",
+        logEvent({
           event: "scope_card_section_viewed",
           jobId,
           attrs: { prefilled_from_profile: prefilledFromProfile },
@@ -325,8 +328,7 @@ export function ApplyPage() {
     const abandon = () => {
       if (logged || !started.current || submittedOnce.current) return;
       logged = true;
-      run({
-        type: "log_event",
+      logEvent({
         event: "application_form_abandoned",
         jobId,
         attrs: { reached_scope_card_section: reachedScopeCard.current },
@@ -337,7 +339,7 @@ export function ApplyPage() {
       window.removeEventListener("pagehide", abandon);
       abandon();
     };
-    // run is recreated per render; the latest state is read through the store ref.
+    // logEvent is recreated per render; it reads the latest state through the store ref.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId, formShown]);
   useEffect(() => {
@@ -492,7 +494,7 @@ export function ApplyPage() {
                     onClick={() => {
                       started.current = true;
                       focusAfterSkip.current = true;
-                      run({ type: "log_event", event: "scope_card_skipped", jobId: job.id });
+                      logEvent({ event: "scope_card_skipped", jobId: job.id });
                       setSkipped(true);
                       setConsent(false);
                     }}
@@ -593,11 +595,10 @@ export function ApplyPage() {
   );
 }
 function ScopeCardLines({ application }: { application: Application }) {
-  const { run } = usePrototype();
+  const { logEvent } = usePrototype();
   const ref = useVisibleOnce<HTMLDivElement>(
     () =>
-      run({
-        type: "log_event",
+      logEvent({
         event: "employer_scope_card_impression",
         applicationId: application.id,
         attrs: { place: "list" },
@@ -618,7 +619,7 @@ function ScopeCardLines({ application }: { application: Application }) {
   );
 }
 export function ApplicationsPage({ employer = false }: { employer?: boolean }) {
-  const { state, run } = usePrototype();
+  const { state, logEvent } = usePrototype();
   const person = currentPerson(state)!;
   const [query, setQuery] = useState("");
   const [params] = useSearchParams();
@@ -629,8 +630,7 @@ export function ApplicationsPage({ employer = false }: { employer?: boolean }) {
     const companyApplications = state.applications.filter((x) => x.companyId === person.companyId);
     for (const jobId of new Set(companyApplications.map((x) => x.jobId))) {
       const forJob = companyApplications.filter((x) => x.jobId === jobId);
-      run({
-        type: "log_event",
+      logEvent({
         event: "employer_candidate_list_viewed",
         jobId,
         attrs: { n_applications: forJob.length, n_with_card: forJob.filter(hasScopeCard).length },

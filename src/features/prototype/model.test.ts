@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import { initialState, transition, stateSchema, type State } from "./model";
 import {
   assignScopeCardVariant,
+  buildExperimentEvent,
   employerSeesScopeCard,
+  type ExperimentEvent,
   metricsCsv,
   publicationMetrics,
 } from "./experiment";
@@ -287,16 +289,14 @@ describe("E1 scope card experiment", () => {
     s.jobs[0].scopeCardVariant = "scope_card";
     const jobId = s.jobs[0].id;
     s = as(s, "candidate-anna");
-    s = transition(
-      s,
-      {
-        type: "log_event",
-        event: "scope_card_section_viewed",
-        jobId,
-        attrs: { prefilled_from_profile: false },
-      },
-      time,
-    );
+    const events: ExperimentEvent[] = [
+      buildExperimentEvent(
+        s,
+        { event: "scope_card_section_viewed", jobId, attrs: { prefilled_from_profile: false } },
+        time,
+      ),
+    ];
+    const before = structuredClone(s);
     s = transition(
       s,
       {
@@ -310,7 +310,9 @@ describe("E1 scope card experiment", () => {
       },
       time,
       "application-anna",
+      events,
     );
+    expect(Object.keys(s)).toEqual(Object.keys(before));
     s = as(s, "employer-brightlabs");
     for (const stage of [
       "reviewed",
@@ -322,8 +324,9 @@ describe("E1 scope card experiment", () => {
         s,
         { type: "stage", applicationId: "application-anna", stage, note: "" },
         time,
+        undefined,
+        events,
       );
-    const events = s.events ?? [];
     expect(events.map((x) => x.event)).toEqual([
       "scope_card_section_viewed",
       "application_submitted",
@@ -344,9 +347,21 @@ describe("E1 scope card experiment", () => {
       events.filter((x) => x.event === "employer_screening_decision").map((x) => x.attrs.decision),
     ).toEqual(["hold", "invite"]);
     expect(events.at(-1)?.attrs).toMatchObject({ decision: "continue", has_card: true });
+    expect(events.find((x) => x.event === "application_submitted")?.actorId).toBe("candidate-anna");
     expect(() =>
-      transition(s, { type: "log_event", event: "employer_tab_opened", applicationId: "missing" }),
+      buildExperimentEvent(s, { event: "employer_tab_opened", applicationId: "missing" }, time),
     ).toThrow();
+    const failed: ExperimentEvent[] = [];
+    expect(() =>
+      transition(
+        s,
+        { type: "stage", applicationId: "application-anna", stage: "reviewed", note: "" },
+        time,
+        undefined,
+        failed,
+      ),
+    ).toThrow();
+    expect(failed).toEqual([]);
   });
   it("reports one row per job for both arms and the baseline", () => {
     let s = enabled();
@@ -366,12 +381,15 @@ describe("E1 scope card experiment", () => {
       "2026-11-03T10:00:00.000Z",
       "application-anna",
     );
-    s = transition(s, {
-      type: "log_event",
-      event: "application_form_abandoned",
-      jobId: s.jobs[1].id,
-      attrs: { reached_scope_card_section: true },
-    });
+    const abandoned = buildExperimentEvent(
+      s,
+      {
+        event: "application_form_abandoned",
+        jobId: s.jobs[1].id,
+        attrs: { reached_scope_card_section: true },
+      },
+      time,
+    );
     s = as(s, "employer-brightlabs");
     for (const stage of [
       "reviewed",
@@ -389,7 +407,7 @@ describe("E1 scope card experiment", () => {
       { type: "stage", applicationId: "application-example", stage: "rejected", note: "" },
       "2026-11-04T10:00:00.000Z",
     );
-    const rows = publicationMetrics(s);
+    const rows = publicationMetrics(s, [abandoned]);
     expect(rows).toHaveLength(s.jobs.length);
     const cardRow = rows.find((x) => x.publicationId === s.jobs[0].id)!;
     expect(cardRow).toMatchObject({
@@ -414,6 +432,10 @@ describe("E1 scope card experiment", () => {
     });
     expect(rows.find((x) => x.publicationId === s.jobs[2].id)?.period).toBe("bazowy");
     const csv = metricsCsv(rows).split("\n");
+    expect(metricsCsv([{ ...rows[0], title: '=HYPERLINK("x")' }])).toContain(
+      `"'=HYPERLINK(""x"")"`,
+    );
+    expect(metricsCsv([{ ...rows[0], daysToFirstInterview: -1.5 }])).toContain('"-1.5"');
     expect(csv[0]).toContain("pct_continue_of_interviews_with_card");
     expect(csv).toHaveLength(rows.length + 1);
   });

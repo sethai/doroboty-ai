@@ -2,6 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { initialState } from "../../src/features/prototype/model";
 import { STORAGE_KEY } from "../../src/features/prototype/storage";
+import { EVENTS_KEY } from "../../src/features/prototype/event-log";
 import { readFile } from "node:fs/promises";
 async function choose(page: Page, name: string) {
   await page.goto("/#/auth/sign-in");
@@ -1030,6 +1031,10 @@ async function seedExperiment(page: Page) {
 async function storedState(page: Page) {
   return page.evaluate((key) => JSON.parse(localStorage.getItem(key)!), STORAGE_KEY);
 }
+type StoredEvent = { event: string; publicationId: string; variant: string; attrs: object };
+async function storedEvents(page: Page): Promise<StoredEvent[]> {
+  return page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? "[]"), EVENTS_KEY);
+}
 
 test("scope card is reused from the profile and shown to employers only in the scope_card arm", async ({
   page,
@@ -1107,9 +1112,10 @@ test("scope card is reused from the profile and shown to employers only in the s
   await expect(page.locator(".record-stage")).toHaveText("Kolejny etap");
   await expect
     .poll(async () =>
-      (await storedState(page)).events.some(
-        (x: { event: string; attrs: { place?: string } }) =>
-          x.event === "employer_scope_card_impression" && x.attrs.place === "detail",
+      (await storedEvents(page)).some(
+        (x) =>
+          x.event === "employer_scope_card_impression" &&
+          (x.attrs as { place?: string }).place === "detail",
       ),
     )
     .toBe(true);
@@ -1130,8 +1136,9 @@ test("scope card is reused from the profile and shown to employers only in the s
       x.scopeCardVariant ?? "none",
     ]),
   );
-  const events: { event: string; publicationId: string; variant: string; attrs: object }[] =
-    state.events;
+  // Events live in their own log, never inside the scenario save.
+  expect(state).not.toHaveProperty("events");
+  const events = await storedEvents(page);
   expect(events.every((x) => jobs.get(x.publicationId) === x.variant)).toBe(true);
   const names = new Set(events.map((x) => x.event));
   for (const name of [
@@ -1180,5 +1187,27 @@ test("scope card is reused from the profile and shown to employers only in the s
   expect(
     after.jobs.find((x: { slug: string }) => x.slug === "ai-product-manager").scopeCardVariant,
   ).toBe("scope_card");
-  expect(after.events.length).toBeGreaterThanOrEqual(events.length);
+  expect((await storedEvents(page)).length).toBeGreaterThanOrEqual(events.length);
+});
+
+test("switching offers in-app starts a fresh form and attributes abandonment to the left offer", async ({
+  page,
+}) => {
+  await choose(page, "Anna Kowalska");
+  await page.goto("/#/aplikuj/ai-product-manager");
+  await page.getByLabel("Dlaczego pasujesz do tej roli?").fill("Szkic dla pierwszej oferty.");
+  await page.getByRole("button", { name: "Pomiń kartę", exact: true }).click();
+  // Hash navigation keeps the same page and route element.
+  await page.goto("/#/aplikuj/ai-operations-specialist");
+  await expect(page.getByLabel("Dlaczego pasujesz do tej roli?")).toHaveValue("");
+  await expect(page.getByRole("button", { name: "Pomiń kartę", exact: true })).toBeVisible();
+  await page.goto("/#/app");
+  const abandoned = (await storedEvents(page)).filter(
+    (x) => x.event === "application_form_abandoned",
+  );
+  const state = await storedState(page);
+  const slugById = new Map<string, string>(
+    state.jobs.map((x: { id: string; slug: string }) => [x.id, x.slug]),
+  );
+  expect(abandoned.map((x) => slugById.get(x.publicationId))).toEqual(["ai-product-manager"]);
 });

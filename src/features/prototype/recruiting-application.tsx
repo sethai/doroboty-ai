@@ -7,7 +7,7 @@ import { nextStages, stageLabels, type Application } from "./model";
 import { usePrototype } from "./store";
 
 export function RecruitingApplication({ application }: { application: Application }) {
-  const { state, run } = usePrototype();
+  const { state, run, logEvent } = usePrototype();
   const [note, setNote] = useState("");
   const [announcement, setAnnouncement] = useState("");
   const statusRef = useRef<HTMLSpanElement>(null);
@@ -19,8 +19,7 @@ export function RecruitingApplication({ application }: { application: Applicatio
   useEffect(() => {
     if (opened.current) return;
     opened.current = true;
-    run({
-      type: "log_event",
+    logEvent({
       event: "employer_application_opened",
       applicationId: application.id,
       attrs: { has_card: hasScopeCard(application) },
@@ -45,20 +44,14 @@ export function RecruitingApplication({ application }: { application: Applicatio
         history={application.events}
         showScopeCard={showScopeCard}
         onScopeCardVisible={() =>
-          run({
-            type: "log_event",
+          logEvent({
             event: "employer_scope_card_impression",
             applicationId: application.id,
             attrs: { place: "detail" },
           })
         }
         onTabChange={(tab) =>
-          run({
-            type: "log_event",
-            event: "employer_tab_opened",
-            applicationId: application.id,
-            attrs: { tab },
-          })
+          logEvent({ event: "employer_tab_opened", applicationId: application.id, attrs: { tab } })
         }
         statusRef={statusRef}
         footer={
