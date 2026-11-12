@@ -10,8 +10,14 @@ const posthogHost = import.meta.env.VITE_PUBLIC_POSTHOG_HOST;
 
 if (posthogToken && posthogHost) {
   posthog.init(posthogToken, {
-    api_host: posthogHost,
+    // Same-origin proxy (netlify.toml in production, vite.config.ts locally)
+    // so privacy blockers do not drop events sent to *.i.posthog.com.
+    api_host: "/ingest",
+    ui_host: posthogHost.replace(".i.posthog.com", ".posthog.com"),
     defaults: "2026-08-30",
+    // Route changes are captured by PageviewTracker in app.tsx.
+    capture_pageview: false,
+    capture_pageleave: true,
     // Free text (notes, scope cards, answers) must never leave the browser.
     session_recording: { maskAllInputs: true, maskTextSelector: "*" },
     logs: {
