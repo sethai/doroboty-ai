@@ -35,3 +35,17 @@ Notes: `identify` sends the synthetic persona name and role. The wizard also sor
 - The user set `VITE_PUBLIC_POSTHOG_PROJECT_TOKEN` and `VITE_PUBLIC_POSTHOG_HOST` (EU) in Netlify, all contexts, not secret. They match the local dev values.
 - Deployed local `main` at `cb7cc3f` (plus the untracked `netlify.toml`) with the Netlify MCP deploy: deploy `6af5d9732bcc3764cbcae9d3`, live at https://doroboty-ai-4axq.netlify.app.
 - Live check in the in-app browser on `#/oferty`: PostHog `config.js`, `/e/` events and `/i/v1/logs` returned 200 from `eu.i.posthog.com`; the session recorder loaded (masking config applies); no console errors.
+
+## Hash-route pageviews and same-origin proxy (2026-11-12)
+
+Problem seen in PostHog live events: very little activity while browsing production.
+
+Findings on https://doroboty-ai-4axq.netlify.app (SDK debug mode in the in-app browser): the bundle has the expected EU token and host, project autocapture is on (`autocapture_opt_out: false`) and `$autocapture`, `$$heatmap` and `$snapshot` were sent with 200 responses. Three route changes (`#/firmy/brightlabs`, `#/oferty`, `#/metodologia`) produced no `$pageview`: PostHog's `history_change` pageviews compare `location.pathname`, which stays `/` under `HashRouter`. Privacy blockers commonly drop requests to `*.i.posthog.com`.
+
+Acceptance criteria:
+
+- Each hash-route navigation sends exactly one `$pageview` (none duplicated by StrictMode); `$pageleave` still sent.
+- With PostHog configured, the browser talks only to its own origin: `/ingest/static/*` → `eu-assets.i.posthog.com`, `/ingest/*` → `eu.i.posthog.com` (Netlify redirects, mirrored by the Vite dev/preview proxy). `ui_host` points to `eu.posthog.com`.
+- With no PostHog variables nothing changes: no proxy, no requests, all journeys pass.
+
+Verification: `npm run dev` with keys in the in-app browser and SDK debug on: `/`, `#/oferty` and `#/metodologia` sent exactly three `$pageview`s; every PostHog request went to `127.0.0.1:3001/ingest/...` with 200 (config, extensions, flags, `/e/`, `/i/v0/e/`, `/s/`, logs); no console errors. `./scripts/verify` on Node 24.22.2 passed: kit (67 files), 37 unit tests, packet (120 journeys), build, 36 Playwright journeys. The Netlify redirects are verified only after a deploy.

@@ -1,4 +1,6 @@
-import { HashRouter, Routes, Route, Navigate } from "react-router";
+import { useEffect, useRef } from "react";
+import { HashRouter, Routes, Route, Navigate, useLocation } from "react-router";
+import { capturePageview } from "./analytics";
 import { PrototypeProvider } from "./store";
 import { Shell, NotFound } from "./shell";
 import HomePage from "./home";
@@ -147,10 +149,23 @@ function AppRoutes() {
     </Routes>
   );
 }
+function PageviewTracker() {
+  const location = useLocation();
+  // One pageview per navigation; the key check also absorbs StrictMode's
+  // repeated mount effect in development.
+  const lastKey = useRef<string | null>(null);
+  useEffect(() => {
+    if (lastKey.current === location.key) return;
+    lastKey.current = location.key;
+    capturePageview();
+  }, [location.key]);
+  return null;
+}
 export function App() {
   return (
     <PrototypeProvider>
       <HashRouter>
+        <PageviewTracker />
         <AppRoutes />
       </HashRouter>
     </PrototypeProvider>
