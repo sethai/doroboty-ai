@@ -1,0 +1,14 @@
+"$schema" = "https://open-api.netlify.com/netlify.schema.json"
+
+# Static Vite build with hash routing: every route is served by index.html at "/",
+# so no SPA fallback redirect is needed.
+[build]
+  command = "npm run build"
+  publish = "dist"
+  environment = { NODE_VERSION = "24" }
+
+# Hashed bundle files never change for a given name.
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
