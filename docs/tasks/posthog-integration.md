@@ -29,3 +29,9 @@ Notes: `identify` sends the synthetic persona name and role. The wizard also sor
 ## Verification
 
 2026-11-12, Node 24.22.2 (Homebrew `node@24`; the default Node 26 is rejected by the design-system kit check): `./scripts/verify` passed — formatting, design-system check (67 files), lint, typecheck, 37 unit tests, packet verification (120 journeys), build, 36 Playwright journeys. With the PostHog-enabled build the same journeys had 6 failures, which is why keys stay out of production builds made locally.
+
+## Production deploy (2026-11-12)
+
+- The user set `VITE_PUBLIC_POSTHOG_PROJECT_TOKEN` and `VITE_PUBLIC_POSTHOG_HOST` (EU) in Netlify, all contexts, not secret. They match the local dev values.
+- Deployed local `main` at `cb7cc3f` (plus the untracked `netlify.toml`) with the Netlify MCP deploy: deploy `6af5d9732bcc3764cbcae9d3`, live at https://doroboty-ai-4axq.netlify.app.
+- Live check in the in-app browser on `#/oferty`: PostHog `config.js`, `/e/` events and `/i/v1/logs` returned 200 from `eu.i.posthog.com`; the session recorder loaded (masking config applies); no console errors.
