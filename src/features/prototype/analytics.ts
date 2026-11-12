@@ -12,6 +12,12 @@ function logPostHogAction(event: string) {
   posthog.logger.info("product action completed", { event_name: event });
 }
 
+// Hash routing keeps location.pathname at "/", so PostHog's history-based
+// pageview capture never fires on route changes. The router calls this instead.
+export function capturePageview() {
+  if (isPostHogConfigured()) posthog.capture("$pageview");
+}
+
 export function captureEvent(event: string, properties?: EventProperties) {
   if (isPostHogConfigured()) {
     posthog.capture(event, properties);
